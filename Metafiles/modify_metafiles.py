@@ -1,4 +1,3 @@
-#!/usr/local/anaconda3/bin/python
 #!/home/argoserver/anaconda3/bin/python
 #
 # Author: H. Frenzel, CICOES, UW // NOAA-PMEL
