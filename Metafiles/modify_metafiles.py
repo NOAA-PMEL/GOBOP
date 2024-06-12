@@ -2,7 +2,7 @@
 #
 # Author: H. Frenzel, CICOES, UW // NOAA-PMEL
 #
-# Current version: November 14, 2023
+# Current version: January 5, 2024
 #
 # First version:   September 14, 2023
 
@@ -19,16 +19,26 @@ import datetime
 import math
 import os
 import re
-import shutil
 import pandas as pd
-
 
 WIDTH_COLUMN1 = 40 # width of left column in output (meta) file
 PHY_DIR = 'PHY_files'
 # tolerance for lon/lat difference between launch position from
-# spreadsheet and start position from phy file:
+# spreadsheet and start position from phy0 file:
 TOL_LON_LAT = 0.1 # in degrees
+# tolerance for time difference between launch time from
+# spreadsheet and start time from phy0 file:
+TOL_TIME = 600 # in seconds
 DUMMY_TIME = '99 99 9999 99 99'
+
+
+def check_sn(table, serial_no):
+    '''Check if the float with the specified serial number is present in
+    the spreadsheet. Raises a ValueError if not.'''
+    matching_float = table[table['serialNumber'] == serial_no]
+    if matching_float.empty:
+        raise ValueError('Float with specified SN not present in spreadsheet')
+
 
 def check_wmo(table, wmoid):
     '''Check if the float with the specified WMO ID is present in
@@ -37,11 +47,12 @@ def check_wmo(table, wmoid):
     if matching_float.empty:
         raise ValueError('Float with specified WMO not present in spreadsheet')
 
+
 def create_lookup():
     '''Create a lookup dictionary. The keys are the fields
     as they appear in the left column of the template file,
     the values are the common headers of the spreadsheet.'''
-    lookup = dict()
+    lookup = {}
     lookup['internal ID number'] = 'AOML'
     lookup['float serial number'] = 'serialNumber'
     lookup['CPU serial number'] = 'serialNumber' # as suggested by Elizabeth
@@ -66,13 +77,14 @@ def create_lookup():
     lookup['ref table PROJECT_NAME'] = 'ProjectName'
     return lookup
 
+
 def read_template_file(fn_templ):
     '''Read the template file with the given name.
     Return the information as a dictionary (left column
     values are the keys, right column values are the
     values).'''
-    template = list()
-    with open(fn_templ, 'r') as f_templ:
+    template = []
+    with open(fn_templ, 'r', encoding='utf-8') as f_templ:
         lines = f_templ.read().splitlines()
 
     for line in lines:
@@ -82,21 +94,19 @@ def read_template_file(fn_templ):
     return template
 
 
-def read_spreadsheet(fn_spread):
-    '''Read the information from the spreadsheet file
-    with the given name.
-    Return the information as a DataFrame.'''
-    table = pd.read_excel(fn_spread)
+def convert_int_columns(df):
+    '''Convert the values in pre-defined columns of a dataframe to int64.
+    If there are missing values in a column, this conversion cannot
+    be done and a warning is issued.'''
     # convert some columns from float to int
     int_cols = ['serialNumber', 'AOML', 'WMO', 'pressureSensorSerialNumber',
                 'CTDSerialNumber', 'IMEI']
     for col in int_cols:
-        if any(table.loc[:,col].isna()):
+        if any(df.loc[:,col].isna()):
             print(f'\nWARNING: missing values found in column "{col}"!\n')
         else:
-            table[col] = table[col].astype('int64')
-
-    return table
+            df[col] = df[col].astype('int64')
+    return df
 
 
 def read_phy0_file(fn_phy):
@@ -105,7 +115,7 @@ def read_phy0_file(fn_phy):
     The starting position and time is returned as a dictionary.'''
     if ARGS.verbose:
         print(f'reading {fn_phy}')
-    with open(fn_phy, 'r') as f_phy:
+    with open(fn_phy, 'r', encoding='utf-8') as f_phy:
         lines = f_phy.read().splitlines()
 
     regex1 = re.compile(r'LATITUDE  LONGITUDE')
@@ -142,7 +152,7 @@ def parse_phy_file(fn_phy0):
         return read_phy0_file(fn_phy0)
     print(f'First PHY file ("{fn_phy0}") not found!')
     print('Using "n/a" and "99s" for the start position and time')
-    return {'lon': -999., 'lat': -999., 'time': -999.}
+    return {'lon': -999., 'lat': -999., 'time': pd.to_datetime('1900-01-01')}
 
 
 def det_launch_pos(this_row, start):
@@ -153,14 +163,17 @@ def det_launch_pos(this_row, start):
     # if a phy0 file exists, lon/lat values must match between that
     # and the launch position in the spreadsheet
     if start['lat'] > -900 and abs(lat - start['lat']) > TOL_LON_LAT:
-        print(f'LAT: launch={lat} vs start={start["lat"]}')
+        print(f'START LAT - table: {lat} vs phy0: {start["lat"]}')
         return None
 
     lon = this_row['lon'].values[0]
     if start['lon'] > -900 and abs(lon - start['lon']) > TOL_LON_LAT:
-        print(f'LON: launch={lon} vs start={start["lon"]}')
+        print(f'START LON - table: {lon} vs phy0: {start["lon"]}')
         return None
-
+    if (pd.isnull(this_row['lon'].values[0]) or
+        pd.isnull(this_row['lat'].values[0])):
+        print('Launch position cannot be determined!')
+        return None
     latd = int(math.trunc(lat))
     latm = (lat - latd) * 60 # minutes, not decimal degress
     lond = int(math.trunc(lon))
@@ -188,12 +201,18 @@ def determine_rhs(line, this_row, lookup, start, fn_out):
             print(f'not creating meta file "{fn_out}"!')
             return None
     elif lhs.startswith('start time'):
-        if start['lon'] < -900.:
-            rhs = DUMMY_TIME
+        if not pd.isnull(this_row['started'].values[0]):
+            start_time = pd.to_datetime(this_row['started'].values[0])
+            if (start['time'].year > 1990. and
+                abs(start_time - start['time']).total_seconds() > TOL_TIME):
+                print(f'START TIME - table: {start_time} vs phy0: {start["time"]}')
+                print(f'not creating meta file "{fn_out}"!')
+                return None
+            rhs = start_time.strftime('%d %m %Y %H %M')
         else:
-            rhs = start['time'].strftime('%d %m %Y %H %M')
+            rhs = DUMMY_TIME
     elif lhs.startswith('launch time'):
-        if this_row['deployed'].any():
+        if not pd.isnull(this_row['deployed'].values[0]):
             deploy_time = pd.to_datetime(this_row['deployed'].values[0])
             rhs = deploy_time.strftime('%d %m %Y %H %M')
         else:
@@ -201,7 +220,7 @@ def determine_rhs(line, this_row, lookup, start, fn_out):
     elif lhs == 'status of start time':
         rhs = 'as transmitted'
     elif lhs.startswith('status of launch'): # time and position
-        if this_row['deployed'].any():
+        if not pd.isnull(this_row['deployed'].values[0]):
             rhs = 'as recorded'
         else:
             rhs = 'n/a'
@@ -221,26 +240,31 @@ def determine_rhs(line, this_row, lookup, start, fn_out):
 
 def create_output_files(template, table, lookup):
     '''Create output files from the given template and values
-    in the table. Output files are created for floats that
-    have WMO defined, unless wmo is specified.'''
-    if ARGS.wmo < 0:
-        floats = table[(table['WMO'] > 1e4)]
+    in the table. If a serial number (first priority) or WMO ID 
+    (second priority) were specified as input arguments, an output file
+    is created for this float only. Otherwise, output files are created for 
+    floats that have SN and WMO defined in the table.'''
+    if ARGS.sn > 0:
+        floats = table[table['serialNumber'] == ARGS.sn].copy()
+    elif ARGS.wmo > 0:
+        floats = table[table['WMO'] == ARGS.wmo].copy()
     else:
-        floats = table[table['WMO'] == ARGS.wmo]
-    for sn in floats['serialNumber'].values.tolist():
-        this_row = table.loc[table['serialNumber'] == sn,:]
-        aoml_number = this_row["AOML"].values[0]
-        fn_phy0 = f'{PHY_DIR}/{sn}/{aoml_number}_{sn:06d}_000.phy'
+        floats = table[(table['WMO'] > 1e4) & (table['serialNumber'] > 0)].copy()
+    floats = convert_int_columns(floats)
+    for ser_no in floats['serialNumber'].values.tolist():
+        this_row = floats.loc[table['serialNumber'] == ser_no,:]
+        aoml_number = this_row['AOML'].values[0]
+        fn_phy0 = f'{PHY_DIR}/{ser_no}/{aoml_number}_{ser_no:06d}_000.phy'
         if ARGS.format.lower() == 'p':
-            fn_out = f'MET{sn}'
+            fn_out = f'MET{ser_no}'
         elif ARGS.format.lower() == 'a':
-            fn_out = f'{aoml_number}_{sn:06d}.meta'
+            fn_out = f'{aoml_number}_{ser_no:06d}.meta'
         else:
             raise ValueError(f'Unknown file name format: {ARGS.format}')
         if ARGS.verbose:
-            print(f'Creating metafile {fn_out} for float with S/N {sn}')
+            print(f'Creating metafile {fn_out} for float with S/N {ser_no}')
         delete = 0
-        with open(fn_out, 'w') as f_out:
+        with open(fn_out, 'w', encoding='utf-8') as f_out:
             start = parse_phy_file(fn_phy0)
             for line in template:
                 rhs = determine_rhs(line, this_row, lookup, start, fn_out)
@@ -265,15 +289,19 @@ def parse_input_args():
                         help='name format for output, p for PMEL (default) or a for AOML')
     parser.add_argument('-v', '--verbose', default=False, action='store_true',
                         help='if set, display more progress updates')
+    parser.add_argument('-s', '--sn', type=int, default=-999,
+                        help='process selected SN id only')
     parser.add_argument('-w', '--wmo', type=int, default=-999,
-                        help='process selected WMO id only')
+                        help='process selected WMO id only (ignored if -s is used)')
     return parser.parse_args()
 
 
 if __name__ == '__main__':
     ARGS = parse_input_args()
-    TABLE = read_spreadsheet(ARGS.spreadsheet)
-    if ARGS.wmo > 0:
+    TABLE = pd.read_excel(ARGS.spreadsheet)
+    if ARGS.sn > 0:
+        check_sn(TABLE, ARGS.sn)
+    elif ARGS.wmo > 0:
         check_wmo(TABLE, ARGS.wmo)
     TEMPLATE = read_template_file(ARGS.template)
     LOOKUP = create_lookup()
