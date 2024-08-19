@@ -7,8 +7,8 @@
  on argoserver.
 
  Requirements:
-   1) A text file "password.txt" must exist in the current working directory.
-      It must contain the password for the ftp server in plain text.
+   1) A text file "ftpserver.json" must exist in the current working directory.
+      It must contain the information about ftp server in plain text.
    2) A text file "status_<ID>.txt" must exist, unless
       no files for this float have been downloaded yet.
 
@@ -19,38 +19,22 @@ FIXME
 
  H. Frenzel, CICOES, University of Washington // NOAA-PMEL
 
- Current version: November 30, 2023
- First version:   September 1, 2023
+ First version: September 1, 2023
 '''
 
 import argparse
 import ftplib
 import glob
 import hashlib
+import json
 import os
 import re
 
-
+SERVER_JSON = 'ftpserver.json'
 TYPES = ['msg', 'log', 'isus']
-SERVER = FTP_SERVER # replace with actual server name
-ACCT = ACCOUNT # replace with actual account name
 FTP_DIR = 'FTP'
 MAX_GAP = 10
 FN_MISSING = 'missing_files.txt'
-
-
-def parse_input_args():
-    '''Parse the command line arguments and return them as object.'''
-    parser = argparse.ArgumentParser(description='')
-    # mandatory argument: float_id (internal, not WMO)
-    parser.add_argument('float_id', help='Internal ID of the float')
-    # options:
-    parser.add_argument('-d', '--directory', default=None, type=str,
-                        help='working directory (default: cwd)')
-    parser.add_argument('-v', '--verbose', default=False, action="store_true",
-                        help='if set, display more progress updates')
-    args = parser.parse_args()
-    return args
 
 
 def change_cwd(dir1):
@@ -85,6 +69,15 @@ def read_text_file(filename):
     return lines
 
 
+def read_server_info():
+    '''Read the information about the ftp server (name, account, and password)
+    from the file with the globally defined name.
+    Return the information as a dictionary.'''
+    with open(SERVER_JSON, 'r', encoding='utf-8') as file:
+        info = json.load(file)
+    return info
+
+
 def get_latest_index(float_id):
     '''Read the status, i.e., the highest index of the already downloaded files
     for each float. If the status file for a float does not exist yet, -1
@@ -96,28 +89,29 @@ def get_latest_index(float_id):
     return -1
 
 
-def connect_ftp(server, acct, passwd, secure=True):
-    '''Connect to the specified ftp server with the given account name
-    and password. Use secure protocol if set. Returns an ftp object
-    if successful. Throws an ftplib xception if the connection cannot be made.'''
+def connect_ftp(server_info, secure=True):
+    '''Connect to the specified ftp server. Use secure protocol if set.
+    Returns an ftp object if successful.
+    Throws an ftplib exception if the connection cannot be made.'''
     if secure:
         ftp_server = ftplib.FTP_TLS()
-        ftp_server.connect(server, timeout=120)
-        ftp_server.login(acct, passwd)
+        ftp_server.connect(server_info['server'], timeout=120)
+        ftp_server.login(server_info['account'], server_info['password'])
         ftp_server.prot_p()
     else:
-        ftp_server = ftplib.FTP(server, acct, passwd)
+        ftp_server = ftplib.FTP(server_info['server'], server_info['account'],
+                                server_info['password'])
     return ftp_server
 
 
-def download_files_ftp(passwd, latest):
+def download_files_ftp(server_info, latest):
     '''Download all files for this float that are available on the ftp server.
     Use the maximum gap between indices as a cut-off for trying beyond
     the given latest index and the last file found.
     Return a list of downloaded files.'''
     downloaded_files = []
     try:
-        ftp_server = connect_ftp(SERVER, ACCT, passwd)
+        ftp_server = connect_ftp(server_info)
     except ftplib.all_errors:
         print('Warning: connection to ftp server could not be established')
         return downloaded_files
@@ -289,14 +283,28 @@ def determine_missing_files(float_id, highest):
         write_missing_files(missing)
 
 
+def parse_input_args():
+    '''Parse the command line arguments and return them as object.'''
+    parser = argparse.ArgumentParser(description='')
+    # mandatory argument: float_id (internal, not WMO)
+    parser.add_argument('float_id', help='Internal ID of the float')
+    # options:
+    parser.add_argument('-d', '--directory', default=None, type=str,
+                        help='working directory (default: cwd)')
+    parser.add_argument('-v', '--verbose', default=False, action="store_true",
+                        help='if set, display more progress updates')
+    args = parser.parse_args()
+    return args
+
+
 if __name__ == '__main__':
     ARGS = parse_input_args()
     change_cwd(ARGS.directory)
-    PASSWD = read_text_file('password.txt')[0]
+    SERVER_INFO = read_server_info()
     LATEST = get_latest_index(ARGS.float_id)
     check_dir(FTP_DIR)
     change_cwd(FTP_DIR)
-    DOWNLOADED_FTP = download_files_ftp(PASSWD, LATEST)
+    DOWNLOADED_FTP = download_files_ftp(SERVER_INFO, LATEST)
     change_cwd(ARGS.directory)
     if check_files_ftp(DOWNLOADED_FTP):
         os.system('make -f /home/argoserver/bgc/bgc_navis1460/makefile Export') 
