@@ -19,7 +19,8 @@ FIXME
 
  H. Frenzel, CICOES, University of Washington // NOAA-PMEL
 
- First version: September 1, 2023
+ Current version: November 30, 2023
+ First version:   September 1, 2023
 '''
 
 import argparse
@@ -95,6 +96,20 @@ def get_latest_index(float_id):
     return -1
 
 
+def connect_ftp(server, acct, passwd, secure=True):
+    '''Connect to the specified ftp server with the given account name
+    and password. Use secure protocol if set. Returns an ftp object
+    if successful. Throws an ftplib xception if the connection cannot be made.'''
+    if secure:
+        ftp_server = ftplib.FTP_TLS()
+        ftp_server.connect(server, timeout=120)
+        ftp_server.login(acct, passwd)
+        ftp_server.prot_p()
+    else:
+        ftp_server = ftplib.FTP(server, acct, passwd)
+    return ftp_server
+
+
 def download_files_ftp(passwd, latest):
     '''Download all files for this float that are available on the ftp server.
     Use the maximum gap between indices as a cut-off for trying beyond
@@ -102,7 +117,7 @@ def download_files_ftp(passwd, latest):
     Return a list of downloaded files.'''
     downloaded_files = []
     try:
-        ftp_server = ftplib.FTP(SERVER, ACCT, passwd)
+        ftp_server = connect_ftp(SERVER, ACCT, passwd)
     except ftplib.all_errors:
         print('Warning: connection to ftp server could not be established')
         return downloaded_files
@@ -120,13 +135,15 @@ def download_files_ftp(passwd, latest):
                 last_good = index
                 downloaded_files.append(filename)
             except ftplib.all_errors:
-                print(f'could not download {filename}')
+                if ARGS.verbose:
+                    print(f'could not download {filename}')
                 # a file of size 0 is created during a failed download
                 os.remove(filename)
         index += 1
         # try a few files with higher indices
         if index > latest + MAX_GAP and index > last_good + MAX_GAP:
             break
+    ftp_server.quit()
     return downloaded_files
 
 
@@ -141,13 +158,16 @@ def check_files_ftp(files_ftp):
     subdirectory as is.
     If both files are the same size, compare hashes. If they are identical,
     remove the file in the ftp subdirectory, otherwise keep it.
-    Pre: cwd must be the main directory.'''
+    Pre: cwd must be the main directory.
+    Return True if new files exist, False otherwise.'''
+    new_files = False
     for filename in files_ftp:
         print(f'checking {filename}')
         fn_ftp = f'{FTP_DIR}/{filename}'
         if not os.path.exists(filename):
             print(f'MOVING: {fn_ftp} TO {filename}')
             os.rename(fn_ftp, filename)
+            new_files = True
         else: # file exists in main and subdirectory
             # first compare sizes
             size_main = os.path.getsize(filename)
@@ -157,8 +177,9 @@ def check_files_ftp(files_ftp):
                 fn_new = f'{filename}.{size_main}'
                 print(f'RENAMING: {filename} TO {fn_new}')
                 os.rename(filename, fn_new)
-                print(f'KEEPING: {fn_ftp}')
+                print(f'KEEPING FILE FROM FTP: {fn_ftp}')
                 os.rename(fn_ftp, filename)
+                new_files = True
             elif size_ftp == size_main:
                 # hash both files
                 with open(filename, 'rb') as file:
@@ -177,6 +198,7 @@ def check_files_ftp(files_ftp):
             else:
                 # if ftp version is smaller, keep it as is
                 print('FTP VERSION IS SMALLER, KEEP IT')
+    return new_files
 
 
 def backup_missing_files():
@@ -221,6 +243,7 @@ def find_latest_profile(float_id):
     highest = -1
     regex = re.compile(r'\w+\.(\d+)\.\w+')
     for ftype in TYPES:
+        print(ftype)
         # do not use "*" as the pattern for the profile index
         # there are log files with very large numbers in that place
         pattern = f'{float_id}.???.{ftype}'
@@ -275,7 +298,8 @@ if __name__ == '__main__':
     change_cwd(FTP_DIR)
     DOWNLOADED_FTP = download_files_ftp(PASSWD, LATEST)
     change_cwd(ARGS.directory)
-    check_files_ftp(DOWNLOADED_FTP)
+    if check_files_ftp(DOWNLOADED_FTP):
+        os.system('make -f /home/argoserver/bgc/bgc_navis1460/makefile Export') 
     FN_BAK_MISSING = backup_missing_files()
     print(f'New name of most recent backup file: {FN_BAK_MISSING}')
     LATEST = find_latest_profile(ARGS.float_id)
