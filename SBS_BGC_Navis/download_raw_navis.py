@@ -371,7 +371,7 @@ if __name__ == '__main__':
     DOWNLOADED_FTP = download_files_ftp()
     change_cwd(ARGS.directory)
     if check_files_ftp(DOWNLOADED_FTP):
-        os.system('make -f ./makefile Export')
+        os.system('make -f makefile Export >& /dev/null')
     FN_BAK_MISSING = backup_missing_files()
     if FN_BAK_MISSING:
         print(f'New name of most recent backup file: {FN_BAK_MISSING}')
