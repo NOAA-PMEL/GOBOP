@@ -163,10 +163,10 @@ def download_files_ftp():
     change_cwd(FTP_DIR)
 
     server_info = read_server_info()
-    ftp_server = connect_ftp(server_info)
     downloaded_files = []
     prev_downloaded = get_prev_downloaded()
     try:
+        ftp_server = connect_ftp(server_info)
         available_files = get_ftp_listings(ftp_server)
         with open(FTP_DOWNLOADS, 'a', encoding='utf-8') as file_out:
             for filename, stats in available_files.items():
