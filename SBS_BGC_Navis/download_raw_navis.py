@@ -60,7 +60,7 @@ def read_text_file(filename):
     '''Read the file with the given filename and return its lines as a list
     of strings. None is returned if the file could not be opened or read.'''
     try:
-        with open(filename) as file:
+        with open(filename, 'r', encoding='utf-8') as file:
             lines = file.read().splitlines()
     except OSError:
         print(f'File "{filename}" could not be read!')
@@ -101,8 +101,7 @@ def parse_lines(lines, num_to_skip=0):
         if len(parts) != 5:
             raise IOError(f'File {FTP_DOWNLOADS} could not be read correctly!')
         entries[parts[0]] = parts[1:]
-    
-    return(entries)
+    return entries
 
 
 def create_ftp_downloads():
@@ -124,7 +123,7 @@ def get_ftp_listings(ftp_server):
     for entry in all_files:
         parts = entry.split()
         [size, month, day, year_or_time, name] = parts[4:]
-        all_months = {month: index for index, month in 
+        all_months = {month: index for index, month in
                       enumerate(calendar.month_abbr) if month}
         # the time entry does not need to be kept as it does
         # not help in comparison: once the listing switches from
@@ -170,10 +169,9 @@ def download_files_ftp():
     try:
         available_files = get_ftp_listings(ftp_server)
         with open(FTP_DOWNLOADS, 'a', encoding='utf-8') as file_out:
-            for filename in available_files:
+            for filename, stats in available_files.items():
                 if ARGS.verbose:
                     print(f'Processing {filename}')
-                stats = available_files[filename] # shortcut
                 do_download = False # default
                 if not os.path.exists(filename):
                     do_download = True
@@ -181,7 +179,7 @@ def download_files_ftp():
                     if ARGS.verbose:
                         print(f'Downloaded {filename} from ftp before')
                     if filename in prev_downloaded:
-                        is_ident = [a == b for a, b in 
+                        is_ident = [a == b for a, b in
                                     zip(prev_downloaded[filename], stats)]
                         if not all(is_ident):
                             print('Versions differ, downloading again')
@@ -218,7 +216,7 @@ def get_hash(filename):
         hash_value = digest.hexdigest()
     return hash_value
 
-   
+
 def get_epoch_time(month, day, year):
     '''Get the UNIX/epoch time for midnight of the specified date.
     Input values are strings, with month in literal format, e.g., 'Jan'.
@@ -261,9 +259,9 @@ def check_files_ftp(files_ftp):
             mtime_ftp = get_epoch_time(prev_downloaded[filename][1],
                                        prev_downloaded[filename][2],
                                        prev_downloaded[filename][3])
-            if (size_ftp == size_main and 
+            if (size_ftp == size_main and
                 get_hash(filename) == get_hash(fn_ftp)):
-                    print(f'IDENTICAL FILE, NOT USING: {fn_ftp}')
+                print(f'IDENTICAL FILE, NOT USING: {fn_ftp}')
             elif mtime_main > mtime_ftp + SEC_PER_DAY:
                 # for older files, only dates are known, not times
                 # so keep 1 day as cushion
@@ -330,7 +328,7 @@ def write_missing_files(filenames_missing):
     ''' Create a file named {MISSING_FILES} and write the missing
     file names into it, one per line).'''
     try:
-        with open(MISSING_FILES, 'w') as file:
+        with open(MISSING_FILES, 'w', encoding='utf-8') as file:
             for filename in filenames_missing:
                 file.write(f'{filename}\n')
     except OSError:
@@ -341,7 +339,7 @@ def determine_missing_files(float_id, highest):
     '''Given the highest found profile index, determine which
     files are mssing.
     Also create file {MISSING_FILES} if there are missing files.'''
-    missing = list()
+    missing = []
     for index in range(highest+1):
         for ftype in TYPES:
             if index == 0 and ftype == 'isus':
@@ -373,7 +371,7 @@ if __name__ == '__main__':
     DOWNLOADED_FTP = download_files_ftp()
     change_cwd(ARGS.directory)
     if check_files_ftp(DOWNLOADED_FTP):
-        os.system('make -f ./makefile Export') 
+        os.system('make -f ./makefile Export')
     FN_BAK_MISSING = backup_missing_files()
     if FN_BAK_MISSING:
         print(f'New name of most recent backup file: {FN_BAK_MISSING}')
