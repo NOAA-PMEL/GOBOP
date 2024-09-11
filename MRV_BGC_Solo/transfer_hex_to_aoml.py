@@ -1,18 +1,26 @@
 #!/home/argotest/anaconda3/bin/python
 
+'''
+transfer_hex_to_aoml.py: This script checks if new raw data from
+MRV BGC-Solo floats have come in. If so, the *.rudics files will be
+converted to *hex format, and a gzipped version of the hex file
+will be uploaded to specified ftp servers.
+'''
+
 import argparse
 import datetime
 import ftplib
 import glob
 import hashlib
+import json
 import os
 import re
 import subprocess
 import time
-import pandas as pd
 import shutil
+import pandas as pd
 
-
+SERVER_JSON = 'ftpserver.json'
 BASE_PATH = '/var/rudics-store/PlatformDir/'
 TIME_GAP = 300 # seconds to wait before processing latest files
 CMD_R2H = '/home/argotest/rudics/server/rudics-rs/target/release/rudics2hex'
@@ -57,14 +65,14 @@ def get_checksum(filename, hash_function='sha256'):
 
     hash_function = hash_function.lower()
 
-    with open(filename, "rb") as f:
-        bytes = f.read()  # read file as bytes
+    with open(filename, 'rb') as f_ptr:
+        bytes_read = f_ptr.read()  # read file as bytes
         if hash_function == 'sha256':
-            readable_hash = hashlib.sha256(bytes).hexdigest()
+            readable_hash = hashlib.sha256(bytes_read).hexdigest()
         elif hash_function == 'md5':
-            readable_hash = hashlib.md5(bytes).hexdigest()
+            readable_hash = hashlib.md5(bytes_read).hexdigest()
         else:
-            Raise(f'{hash_function} is an invalid hash function.' +
+            raise(f'{hash_function} is an invalid hash function.' +
                   'Please use md5 or sha256')
 
     return readable_hash
@@ -80,7 +88,7 @@ def parse_filename(filename):
     parts = re.split(r'_|\.', fname)
     if parts[-1] != 'rudics':
         print(f'WARNING: File "{fname}" could not be parsed!')
-        return fname, -999, -999, -999, -999, 'X',
+        return fname, -999, -999, -999, -999, 'X'
     floatid = int(parts[0].replace('sn', ''))
     transmission = int(parts[1].replace('s', ''))
     ftype = parts[-2]
@@ -114,21 +122,21 @@ def create_log_file(filename_log):
     '''Create the file that logs which raw Argo files have been
     processed yet. Raise an IOError if the file cannot be created.'''
     try:
-        with open(filename_log, 'w') as file:
+        with open(filename_log, 'w', encoding='utf-8') as file:
             file.write('Filename,FloatID,WMOID,Type,Transmission,Cycle,Block,')
             file.write('Size,Checksum,Processing_date\n')
-    except:
-        raise IOError(f'ERROR: Could not create "{filename_log}"!')
+    except Exception as exc:
+        raise IOError(f'ERROR: Could not create "{filename_log}"!') from exc
 
 
 def create_ftp_log_file(filename_ftp_log):
     '''Create the file that logs which hex files have been
     uploaded to AOML yet. Raise an IOError if the file cannot be created.'''
     try:
-        with open(filename_ftp_log, 'w') as file:
+        with open(filename_ftp_log, 'w', encoding='utf-8') as file:
             file.write('Filename,Checksum,Size,Upload_date\n')
-    except:
-        raise IOError(f'ERROR: Could not create "{filename_log}"!')
+    except Exception as exc:
+        raise IOError(f'ERROR: Could not create "{filename_ftp_log}"!') from exc
 
 
 def mark_file_processed(filename, fn_log):
@@ -143,7 +151,7 @@ def mark_file_processed(filename, fn_log):
     shasum = get_checksum(filename)
     size = os.path.getsize(filename)
     now = datetime.datetime.now()
-    with open(fn_log, 'a') as f_log:
+    with open(fn_log, 'a', encoding='utf-8') as f_log:
         f_log.write(f'{filename},{floatid},{wmoid},{ftype},{trans},{cycle},')
         f_log.write(f'{block},{size},{shasum},')
         f_log.write(f'{now.strftime("%Y/%m/%d %H:%M:%S")}\n')
@@ -162,19 +170,28 @@ def sort_files_mtime(file_list):
     sorted_files = [mtime_files[mtime] for mtime in sorted_mtimes]
     return sorted_files, last_mtime
 
-        
+
+def read_server_info():
+    '''Read the information about the ftp server (name, account, and password)
+    from the file with the globally defined name.
+    Return the information as a dictionary.'''
+    with open(SERVER_JSON, 'r', encoding='utf-8') as file:
+        info = json.load(file)
+    return info
+
+
 def connect_ftp(server, acct, passwd, secure=False):
     '''Connect to the specified ftp server with the given account name
     and password. Use secure protocol if set. Returns an ftp object
     if successful. Throws an ftplib exception if the connection cannot be made.'''
     # note that as of May 2024, the connection to AOML must not be secure
     if secure:
-    	ftp_server = ftplib.FTP_TLS()
-    	ftp_server.connect(server, timeout=120)
-    	ftp_server.login(acct, passwd)
-    	ftp_server.prot_p()
+        ftp_server = ftplib.FTP_TLS()
+        ftp_server.connect(server, timeout=120)
+        ftp_server.login(acct, passwd)
+        ftp_server.prot_p()
     else:
-    	ftp_server = ftplib.FTP(server, acct, passwd)
+        ftp_server = ftplib.FTP(server, acct, passwd)
     return ftp_server
 
 
@@ -186,25 +203,27 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
     aoml_id = DICT_FLOAT_IDS[int(ser_no)][1]
     fn_aoml = f'{aoml_id}_{int(ser_no):06}.hex'
     fn_gzip = f'hex/upload/{fn_aoml}' # FIXME path hard-coded here
-    shutil.copy(fn_hex, fn_gzip) 
+    shutil.copy(fn_hex, fn_gzip)
     cmd = ['gzip', '-f', fn_gzip] # force: overwrite existing .gz file
-    result = subprocess.run(cmd, stdout=subprocess.PIPE)
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, check=True)
+    if result.returncode:
+        print('WARNING: gzip command may have failed!')
     fn_gzip += '.gz'
     if not destination:
         dest = FTP_NAMES
     else:
         dest = [destination]
-    for dst in dest:    
+    for dst in dest:
         print(f'Now uploading to {dst}: {fn_gzip}')
         idx = FTP_NAMES.index(dst)
         success = False
         try:
             ftp_server = connect_ftp(FTP_HOSTS[idx], FTP_USERS[idx], FTP_PW[idx])
             ftp_server.cwd(FTP_DIRS[idx])
-        except:
+        except ftplib.all_errors:
             print('Warning: connection to ftp server could not be established')
             return
-        try: 
+        try:
             with open(fn_gzip, 'rb') as file:
                 print(f'opened {fn_gzip}')
                 fname = os.path.basename(fn_gzip) # without the path
@@ -221,7 +240,7 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
             shasum = get_checksum(fn_hex)
             size = os.path.getsize(fn_hex)
             now = datetime.datetime.now()
-            with open(fn_ftp_log, 'a') as f_log:
+            with open(fn_ftp_log, 'a', encoding='utf-8') as f_log:
                 f_log.write(f'{fn_hex},{shasum},{size},{dst},{now}\n')
 
 
@@ -263,20 +282,22 @@ def process_float(serial_no):
     log = pd.read_csv(fn_log)
     ftp_log = pd.read_csv(fn_ftp_log)
     if ARGS.verbose:
-        print(f'Processing files for float {serial_no}') 
+        print(f'Processing files for float {serial_no}')
     fn_hex = f'hex/{serial_no}.hex'
     # wait until a set of transmissions is completed - allow a time gap
     # before actually processing them
     sorted_new_files = wait_transmission_complete(serial_no, log)
-    wmoid = DICT_FLOAT_IDS[int(serial_no)][0]
+    #FIXME unneeded? wmoid = DICT_FLOAT_IDS[int(serial_no)][0]
     for file in sorted_new_files:
         full_cmd = [CMD_R2H, '-vvv', '--output', 'hex', 'append', file]
-        result = subprocess.run(full_cmd, stdout=subprocess.PIPE)
+        result = subprocess.run(full_cmd, stdout=subprocess.PIPE, check=True)
         print(result.stdout) # stdout can be redirected to file by user
+        if result.returncode:
+            print('WARNING: rudics2hex command may have failed!')
         mark_file_processed(file, fn_log)
     if ARGS.no_transfer:
         return
-    # upload the hex file only if it was changed or missing on ftp server(s)   
+    # upload the hex file only if it was changed or missing on ftp server(s)
     if sorted_new_files:
         upload_hex_ftp(fn_hex, fn_ftp_log) # upload to both servers
     else:
@@ -296,7 +317,7 @@ def process_float(serial_no):
                     shasum_ftp = rows_host['Checksum'].values[-1] # most recent upload
                     if shasum != shasum_ftp:
                         upload_hex_ftp(fn_hex, fn_ftp_log, host)
-        
+
 
 def parse_input_args():
     '''Parse the command line arguments and return them as an object.'''
