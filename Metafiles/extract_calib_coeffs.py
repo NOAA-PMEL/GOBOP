@@ -67,6 +67,7 @@ def create_calib_to_table(calib, table):
     c2t['oxy_INSTRUMENT_TYPE'] = 'oxygenSensorType'
     c2t['oxy_SERIALNO'] = 'oxygenSensorSerialNumber'
     c2t['oxyCalDate'] = 'oxygenCalDate'
+    # one set for one format of the .cal file
     c2t['oxy_SetA0'] = 'oxygen_A0'
     c2t['oxy_SetA1'] = 'oxygen_A1'
     c2t['oxy_SetA2'] = 'oxygen_A2'
@@ -80,6 +81,20 @@ def create_calib_to_table(calib, table):
     c2t['oxy_SetTA1'] = 'oxygen_TA1'
     c2t['oxy_SetTA2'] = 'oxygen_TA2'
     c2t['oxy_SetTA3'] = 'oxygen_TA3'
+    # another set for another format of the .cal file
+    c2t['oxy_a0'] = 'oxygen_A0'
+    c2t['oxy_a1'] = 'oxygen_A1'
+    c2t['oxy_a2'] = 'oxygen_A2'
+    c2t['oxy_b0'] = 'oxygen_B0'
+    c2t['oxy_b1'] = 'oxygen_B1'
+    c2t['oxy_c0'] = 'oxygen_C0'
+    c2t['oxy_c1'] = 'oxygen_C1'
+    c2t['oxy_c2'] = 'oxygen_C2'
+    c2t['oxy_e'] = 'oxygen_E'
+    c2t['oxy_ta0'] = 'oxygen_TA0'
+    c2t['oxy_ta1'] = 'oxygen_TA1'
+    c2t['oxy_ta2'] = 'oxygen_TA2'
+    c2t['oxy_ta3'] = 'oxygen_TA3'
     #FIXME oxygenCalDate
     c2t['chla_ser_no'] = 'ecoSensorSerialNumber'
     c2t['CHL_DC'] = 'chl_DarkCount'
@@ -101,7 +116,12 @@ def create_calib_to_table(calib, table):
     c2t['suna_ser_no'] = 'nitrateSensorSerialNumber'
     c2t['ph_ser_no'] = 'phSensorSerialNumber'
     c2t['ph_serial_number'] = 'phSensorSerialNumber'
-    
+    # from the general configuration file
+    c2t['gen_Float_Controller_SN'] = 'floatControllerSerialNumber'
+    c2t['gen_SIM_ICCID'] = 'SIM card'
+    c2t['gen_GPS_SN'] = 'gpsSerialNumber'
+    c2t['gen_Druck_Pressure_SN'] = 'pressureSensorSerialNumber'
+    c2t['gen_Float_Controller_FW_Version'] = 'ROMVersion'
     return c2t
     
 def convert_int_columns(df):
@@ -287,12 +307,14 @@ def read_calibration(fn_calib, calib, sensor_type):
     # this file has a simple format with lines like this:
     # SERIALNO=1855
     lines = get_lines_cal_file(fn_calib)
-    regex_date = re.compile(r'(\d{2})\-(\w{3})\-(\d{2})')
+    regex_date = re.compile(r'(\d{2})\-(\w{3})\-(\d{2})')  # DD-MON-YY
+    regex_date2 = re.compile(r'(\d{4})\-(\d{2})\-(\d{2})') # YYYY-MM-DD
     for line in lines:
         contents = line.strip().split('=')
         if 'caldate' in contents[0].lower():
             match_obj = regex_date.search(contents[1].strip())
-            if match_obj:
+            match_obj2 = regex_date2.search(contents[1].strip())
+            if match_obj or match_obj2:
                 if sensor_type == 'ctd':
                     if contents[0] == 'TCALDATE':
                         var_name = 'tempCalDate'
@@ -302,11 +324,18 @@ def read_calibration(fn_calib, calib, sensor_type):
                         var_name = 'pressureCalDate'                        
                 else:
                     var_name = f'{sensor_type}CalDate'
-                month = MONTHS.index(match_obj.group(2)[0:3].lower()) + 1
-                # store internally as MM/DD/YYYY, input is DD-MON-YY
-                calib[var_name] = f'{month:02}/' + \
-                    f'{int(match_obj.group(1)[-2:]):02}' + \
-                    f'/{int(match_obj.group(3)) + 2000}'
+                if match_obj:
+                    month = MONTHS.index(match_obj.group(2)[0:3].lower()) + 1
+                    # store internally as MM/DD/YYYY, input is DD-MON-YY
+                    # FIXME do I need [-2:]
+                    calib[var_name] = f'{month:02}/' + \
+                        f'{int(match_obj.group(1)[-2:]):02}' + \
+                        f'/{int(match_obj.group(3)) + 2000}'
+                else:
+                    calib[var_name] = f'{int(match_obj2.group(2)):-2}/' + \
+                        f'{int(match_obj2.group(3)):02}' + \
+                        f'/{int(match_obj2.group(1))}'
+                
         else:
             calib[f'{sensor_type}_{contents[0].strip()}'] = contents[1].strip()
     return calib
@@ -339,7 +368,7 @@ def read_calibration_eco(fn_calib, calib):
             contents = line.strip().split('=')
             contents2 = contents[1].split()
             # first element of contents2 is the channel, which is not used
-            if contents[0] == 'lambda':
+            if contents[0].lower() == 'lambda':
                 wavelength = int(contents2[3])
                 var_name = f'BBP{wavelength}'
             else:
@@ -377,7 +406,7 @@ def read_calibration_ocr(fn_calib, calib):
             wavelength = round(float(contents[1]))
             # WARNING this is a hack! For 4005, reported wavelength
             # in calibration file is 489.23, but it should be 490
-            if wavelength == 489:
+            if wavelength == 489 or wavelength == 491:
                 wavelength = 490
                 print(f'Wavelength adjusted to {wavelength}')
             next_contents = lines[idx+1].split()
@@ -456,7 +485,7 @@ def read_calibration_ph(fn_calib, calib):
             if 'fp' in last_line.lower():
                 calib['ph_fp_poly_order' ] = contents[1].strip()
             elif 'k2p' in last_line.lower():
-                calib['ph_k2p_poly_order' ] = contents[1].strip()
+                calib['ph_k2p_poly_order' ] = contents[1].strip() # not really used, right?
         elif len(contents) > 1:
             if contents[0].lower().startswith('ph_'):
                 print(contents)
@@ -471,6 +500,27 @@ def read_calibration_ph(fn_calib, calib):
             calib.pop('ph_isfet_serial_number')
     return calib
 
+def read_general_config(fn_general_cfg, calib):
+    '''Read the general configuration information from the file with the
+    specified name.
+    Add information to the "calib" dictionary and return it.'''
+    regex = re.compile(r'([\w\s]+),\s+([\w\d\s\.]+)')
+    lines = get_lines_cal_file(fn_general_cfg)
+    keep_keys = ['IMEI', 'CTD FW Version', 'Dry Mass']    
+    for line in lines:
+        match_obj = regex.search(line.strip())
+        if match_obj:
+            rhs = match_obj.group(2)
+            if match_obj.group(1) in keep_keys:
+                calib[match_obj.group(1)] = rhs
+            else:
+                lhs = 'gen_' + match_obj.group(1).replace(' ', '_')
+                calib[lhs] = rhs
+                if 'Druck Pressure' in lhs:
+                    calib['pressureSensorManufacturer'] = 'Druck'
+    return calib        
+
+    
 def fill_spreadsheet(calib, table, calib_to_table):
     '''Create an output file from the given template and values
     in the table. A serial number (first priority) or WMO ID 
@@ -494,6 +544,10 @@ def fill_spreadsheet(calib, table, calib_to_table):
         # other keys are the same, they can be used as is
         if ckey not in table.columns:
             print(f'Not in table: {ckey}')
+            if ckey == 'gen_FloatID' and int(calib[ckey]) != ser_no:
+                raise ValueError('Mismatch in float serial numbers!')
+            elif ckey == 'gen_CTD_SN' and calib[ckey] != calib['ctd_SERIALNO']:
+                raise ValueError('Mismatch in CTD serial numbers!')
             continue
         if not pd.isna(table.loc[idx, ckey]) and value != table.loc[idx, ckey]:
             is_diff = True
@@ -519,6 +573,10 @@ def fill_spreadsheet(calib, table, calib_to_table):
             else:
                 print(f'NOT CHANGING: {ckey} value is {value}')
         else:
+            try:
+                value = float(value)
+            except:
+                pass # keep it as a string
             table.loc[idx, ckey] = value
     table.to_excel(ARGS.spreadsheet, index=False)
     
@@ -545,6 +603,8 @@ def parse_input_args():
     # options:
     parser.add_argument('-c', '--confirm', default=False, action='store_true',
                         help='if set, ask for confirmation before overwriting existing values')
+    parser.add_argument('-g', '--general_config', type=str, default = None,
+                        help='name of the general configuration file')
     parser.add_argument('-v', '--verbose', default=False, action='store_true',
                         help='if set, display more progress updates')
     parser.add_argument('-s', '--sn', type=int, default=-999,
@@ -571,5 +631,7 @@ if __name__ == '__main__':
     CALIB = read_calibration_ph(ARGS.calibration_ph, CALIB)
     if ARGS.calibration_ocr:
         CALIB = read_calibration_ocr(ARGS.calibration_ocr, CALIB)
+    if ARGS.general_config:
+        CALIB = read_general_config(ARGS.general_config, CALIB)
     calib_to_table = create_calib_to_table(CALIB, TABLE)
     fill_spreadsheet(CALIB, TABLE, calib_to_table)
