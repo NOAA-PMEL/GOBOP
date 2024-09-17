@@ -7,32 +7,17 @@
 # First version:   September 14, 2023
 
 '''
-This script reads in a spreadsheet that contains metadata for Argo floats,
+This script reads calibration coefficients from several text files
+and fills the values into a spreadsheet that contains metadata for BGC Argo floats,
 typically downloaded from Google Drive.
-It also reads in a template metafile. It fills in all available data
-from the spreadsheet and creates a new metafile either for one specified
-float or all floats from the spreadsheet.
 '''
 
 import argparse
-import datetime
-import math
 import os
 import re
 import pandas as pd
 
-import pdb
-
-
-PHY_DIR = 'PHY_files'
-# tolerance for lon/lat difference between launch position from
-# spreadsheet and start position from phy0 file:
-TOL_LON_LAT = 0.1 # in degrees
-# tolerance for time difference between launch time from
-# spreadsheet and start time from phy0 file:
-TOL_TIME = 600 # in seconds
-DUMMY_TIME = '99 99 9999 99 99'
-
+# for format conversion of dates
 MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
           'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
 
@@ -52,14 +37,13 @@ def check_wmo(table, wmoid):
     if matching_float.empty:
         raise ValueError('Float with specified WMO not present in spreadsheet')
 
-def create_calib_to_table(calib, table):
-    '''Create a dictionary that uses the keys of the CALIB dictionary as keys
+def create_calib_to_table():
+    '''Create a dictionary that uses standardized keys
     and the column names of the spreadsheet as values.
     Only those columns that have different names between the CALIB dictionary and
     the spreadsheet are listed here. Some columns with calibration coefficients
     (e.g., 'ph_f1') are the same in both.'''
     c2t = {}
-    #print(calib.keys())
     c2t['ctd_SERIALNO'] = 'CTDSerialNumber'
     c2t['ctd_TCALDATE'] = 'tempCalDate'
     c2t['ctd_CCALDATE'] = 'conductivityCalDate'
@@ -95,7 +79,6 @@ def create_calib_to_table(calib, table):
     c2t['oxy_ta1'] = 'oxygen_TA1'
     c2t['oxy_ta2'] = 'oxygen_TA2'
     c2t['oxy_ta3'] = 'oxygen_TA3'
-    #FIXME oxygenCalDate
     c2t['chla_ser_no'] = 'ecoSensorSerialNumber'
     c2t['CHL_DC'] = 'chl_DarkCount'
     c2t['CHL_Scale'] = 'chl_Scale'
@@ -123,7 +106,8 @@ def create_calib_to_table(calib, table):
     c2t['gen_Druck_Pressure_SN'] = 'pressureSensorSerialNumber'
     c2t['gen_Float_Controller_FW_Version'] = 'ROMVersion'
     return c2t
-    
+
+
 def convert_int_columns(df):
     '''Convert the values in pre-defined columns of a dataframe to int64.
     If there are missing values in a column, this conversion cannot
@@ -137,158 +121,6 @@ def convert_int_columns(df):
         else:
             df[col] = df[col].astype('int64')
     return df
-
-"""
-def read_phy0_file(fn_phy):
-    '''Extract the start time from the first phy file for a given float.
-    This function does not check that it is a '_000.phy' file.
-    The starting position and time is returned as a dictionary.'''
-    if ARGS.verbose:
-        print(f'reading {fn_phy}')
-    with open(fn_phy, 'r', encoding='utf-8') as f_phy:
-        lines = f_phy.read().splitlines()
-
-    regex1 = re.compile(r'LATITUDE  LONGITUDE')
-    regex2 = re.compile(r'([\-\+]?[\d\.]+)\s+([\-\+]?[\d\.]+)\s+' +
-                        r'(\d{4}/\d\d/\d\d\s+\d\d:\d\d:\d\d)')
-    read_pos_time = False
-
-    for line in lines:
-        if read_pos_time:
-            match_obj = regex2.search(line)
-            if match_obj:
-                lat = float(match_obj.group(1))
-                lon = float(match_obj.group(2))
-                date = datetime.datetime.strptime(match_obj.group(3),
-                                                  '%Y/%m/%d %H:%M:%S')
-                break # this is all we need from this file
-            read_pos_time = False
-        match_obj = regex1.search(line)
-        if match_obj:
-            read_pos_time = True
-    if not read_pos_time:
-        raise ValueError('line with position and date was not found')
-
-    return {'lon': lon, 'lat': lat, 'time': date}
-
-
-def parse_phy_file(fn_phy0):
-    '''Extract and return starting lon/lat/time from the first PHY file.
-    Return -999. values if the file does not exist.'''
-    if not os.path.exists(fn_phy0):
-        # try a descending profile instead
-        fn_phy0 = fn_phy0.replace('000.phy', '000D.phy')
-    if os.path.exists(fn_phy0):
-        return read_phy0_file(fn_phy0)
-    if ARGS.type == 'f':
-        print(f'First PHY file ("{fn_phy0}") not found!')
-        print('Using "n/a" and "99s" for the start position and time')
-    return {'lon': -999., 'lat': -999., 'time': pd.to_datetime('1900-01-01')}
-
-
-def det_launch_pos(this_row, start):
-    '''Determine the launch position and compare it to the start
-    position from the first phy file (except for pre-deployment files). 
-    Return the position formatted as string if the two positions match, 
-    None otherwise.'''
-    if ARGS.type.lower() == 'p':
-        lat = this_row['targetLatitude'].values[0]
-        lon = this_row['targetLongitude'].values[0]
-        msg = 'Creating pre-deployment metafile with target position and date'
-        pos_type = 'Target'
-    else:
-        lat = this_row['lat'].values[0]
-        lon = this_row['lon'].values[0]
-        msg = 'Creating final metafile with reported launch position and date'
-        pos_type = 'Launch'
-
-    if pd.isnull(lon) or pd.isnull(lon):
-        print(f'{pos_type} position cannot be determined!')
-        return None
-    if ARGS.verbose:
-        print(msg)
-    # if a phy0 file exists, lon/lat values must match between that
-    # and the launch position in the spreadsheet
-    if start['lat'] > -900 and abs(lat - start['lat']) > TOL_LON_LAT:
-        print(f'START LAT - table: {lat} vs phy0: {start["lat"]}')
-        return None
-    if start['lon'] > -900 and abs(lon - start['lon']) > TOL_LON_LAT:
-        print(f'START LON - table: {lon} vs phy0: {start["lon"]}')
-        return None
-    latd = int(math.trunc(lat))
-    latm = (lat - latd) * 60 # minutes, not decimal degress
-    lond = int(math.trunc(lon))
-    lonm = (lon - lond) * 60 # minutes
-    return f'{latd} {latm:.3f} {lond} {lonm:.3f}'
-
-#def determine_rhs(line, this_row, lookup, start, fn_out):
-def determine_rhs(line, this_row, lookup, fn_out):
-    '''Evaluate the given left hand side of the string and return
-    the appropriate string for the right hand side of the output string.'''
-    unknowns = ['board battery serial number',
-                'pump battery serial number']
-    drop_lines = ['battery details', 'ref table DEPLOYMENT_PLATFORM_ID']
-    int_columns = ['board serial number']
-    lhs = line[0]
-    if lhs in lookup:
-        key = lookup[lhs]
-        rhs = this_row[key].values[0]
-        if 'calibration date' in lhs:
-            cal_date = pd.to_datetime(str(rhs))
-            pdb.set_trace()
-            rhs = cal_date.strftime('%d %m %Y')
-    elif lhs.startswith('launch position'):
-        rhs = 'CHANGE MANUALLY!' #FIXME det_launch_pos(this_row, start)
-        if not rhs:
-            print(f'not creating meta file "{fn_out}"!')
-            return None
-    elif lhs.startswith('launch time'):
-        if ARGS.type.lower() == 'f' and not pd.isnull(this_row['deployed'].values[0]):
-            deploy_time = pd.to_datetime(this_row['deployed'].values[0])
-            rhs = deploy_time.strftime('%d %m %Y %H %M')
-        elif ARGS.type.lower() == 'p' and not pd.isnull(this_row['targetDate'].values[0]):
-            deploy_time = pd.to_datetime(this_row['targetDate'].values[0])
-            rhs = deploy_time.strftime('%d %m %Y %H %M')
-        else:
-            rhs = DUMMY_TIME
-    elif lhs.startswith('status of launch'): # time and position # *** HGH
-        if ARGS.type.lower() == 'f' and not pd.isnull(this_row['deployed'].values[0]):
-            rhs = 'as recorded'
-        elif ARGS.type.lower() == 'p' and not pd.isnull(this_row['targetDate'].values[0]):
-            rhs = 'as targeted'
-        else:
-            rhs = 'n/a'
-    elif lhs.startswith('start time'):
-        if not pd.isnull(this_row['started'].values[0]):
-            start_time = pd.to_datetime(this_row['started'].values[0])
-            pdb.set_trace()
-            # if a phy0 file exists, start time value must match between that
-            # and the start time in the spreadsheet
-            if (start['time'].year > 1990. and
-                abs(start_time - start['time']).total_seconds() > TOL_TIME):
-                print(f'START TIME - table: {start_time} vs phy0: {start["time"]}')
-                print(f'not creating meta file "{fn_out}"!')
-                return None
-            rhs = start_time.strftime('%d %m %Y %H %M')
-        else:
-            rhs = DUMMY_TIME
-    elif lhs == 'status of start time':
-        rhs = 'as transmitted'
-    elif lhs in unknowns:
-        rhs = 'n/a'
-    elif lhs in drop_lines:
-        rhs = '__DROP_LINE__' # completely drop this line from the output
-    else:
-        rhs = line[1]
-    if lhs in int_columns:
-        rhs = int(rhs) # enforce the output format as integer
-    # a special case of formatting
-    if lhs == 'transmission ID number':
-        rhs = f'{rhs:06d}'
-    if pd.isnull(rhs):
-        print(f'WARNING: {lhs} -> {rhs}')
-    return rhs
-"""
 
 
 def get_lines_cal_file(fn_calib):
@@ -321,21 +153,20 @@ def read_calibration(fn_calib, calib, sensor_type):
                     elif contents[0] == 'CCALDATE':
                         var_name = 'conductivityCalDate'
                     elif contents[0] == 'PCALDATE':
-                        var_name = 'pressureCalDate'                        
+                        var_name = 'pressureCalDate'
                 else:
                     var_name = f'{sensor_type}CalDate'
                 if match_obj:
-                    month = MONTHS.index(match_obj.group(2)[0:3].lower()) + 1
+                    month = MONTHS.index(match_obj.group(2).lower()) + 1
                     # store internally as MM/DD/YYYY, input is DD-MON-YY
-                    # FIXME do I need [-2:]
                     calib[var_name] = f'{month:02}/' + \
-                        f'{int(match_obj.group(1)[-2:]):02}' + \
+                        f'{int(match_obj.group(1)):02}' + \
                         f'/{int(match_obj.group(3)) + 2000}'
                 else:
-                    calib[var_name] = f'{int(match_obj2.group(2)):-2}/' + \
+                    # input is YYYY-MM-DD
+                    calib[var_name] = f'{int(match_obj2.group(2)):02}/' + \
                         f'{int(match_obj2.group(3)):02}' + \
                         f'/{int(match_obj2.group(1))}'
-                
         else:
             calib[f'{sensor_type}_{contents[0].strip()}'] = contents[1].strip()
     return calib
@@ -362,7 +193,7 @@ def read_calibration_eco(fn_calib, calib):
             if yr < 100:
                 yr += 2000 # remember Y2K?
             # store internally as MM/DD/YYYY
-            calib['ecoCalDate'] = f'{mth:02}/{day:02}/{yr}'    
+            calib['ecoCalDate'] = f'{mth:02}/{day:02}/{yr}'
         elif ('=' in line and not line.startswith('N/U')
               and not 'columns' in line.lower()):
             contents = line.strip().split('=')
@@ -379,7 +210,7 @@ def read_calibration_eco(fn_calib, calib):
             match_obj = regex_mcoms.search(line)
             calib['ecoSensorSerialNumber'] = match_obj.group(1)
             calib[match_obj.group(2)] = int(match_obj.group(4))
-            calib[match_obj.group(3)] = float(match_obj.group(5))            
+            calib[match_obj.group(3)] = float(match_obj.group(5))
     return calib
 
 
@@ -406,7 +237,7 @@ def read_calibration_ocr(fn_calib, calib):
             wavelength = round(float(contents[1]))
             # WARNING this is a hack! For 4005, reported wavelength
             # in calibration file is 489.23, but it should be 490
-            if wavelength == 489 or wavelength == 491:
+            if wavelength in (489, 491):
                 wavelength = 490
                 print(f'Wavelength adjusted to {wavelength}')
             next_contents = lines[idx+1].split()
@@ -416,9 +247,9 @@ def read_calibration_ocr(fn_calib, calib):
             calib[f'{var_name}_im'] = next_contents[2]
         elif line.startswith('PAR '):
             next_contents = lines[idx+1].split()
-            calib[f'irradPAR_a0'] = next_contents[0]
-            calib[f'irradPAR_a1'] = next_contents[1]
-            calib[f'irradPAR_im'] = next_contents[2]
+            calib['irradPAR_a0'] = next_contents[0]
+            calib['irradPAR_a1'] = next_contents[1]
+            calib['irradPAR_im'] = next_contents[2]
     return calib
 
 
@@ -466,7 +297,7 @@ def read_calibration_ph(fn_calib, calib):
             contents = line.split('=')
         # some calibration files wrap e.g. serial numbers in double quotes
         if len(contents) > 1:
-            contents[1] = contents[1].replace('"','')    
+            contents[1] = contents[1].replace('"','')
         # in some files, this entry is called 'calibration_date',
         # but in others just 'date'
         if 'date' in contents[0]:
@@ -477,7 +308,7 @@ def read_calibration_ph(fn_calib, calib):
                 contents2 = contents[1].split('-')
                 calib['phCalDate'] = f'{contents2[1].strip():02}/' + \
                     f'{contents2[2].strip():02}/{contents2[0].strip()}'
-            else:    
+            else:
                 contents2 = contents[1].split()
                 calib['phCalDate'] = f'{contents2[1]:02}/{contents2[0]:02}/' + \
                     contents2[2]
@@ -507,7 +338,7 @@ def read_general_config(fn_general_cfg, calib):
     Add information to the "calib" dictionary and return it.'''
     regex = re.compile(r'([\w\s]+),\s+([\w\d\s\.]+)')
     lines = get_lines_cal_file(fn_general_cfg)
-    keep_keys = ['IMEI', 'CTD FW Version', 'Dry Mass']    
+    keep_keys = ['IMEI', 'CTD FW Version', 'Dry Mass']
     for line in lines:
         match_obj = regex.search(line.strip())
         if match_obj:
@@ -519,9 +350,9 @@ def read_general_config(fn_general_cfg, calib):
                 calib[lhs] = rhs
                 if 'Druck_Pressure' in lhs:
                     calib['pressureSensorManufacturer'] = 'Druck'
-    return calib        
+    return calib
 
-    
+
 def fill_spreadsheet(calib, table, calib_to_table):
     '''Create an output file from the given template and values
     in the table. A serial number (first priority) or WMO ID 
@@ -537,8 +368,6 @@ def fill_spreadsheet(calib, table, calib_to_table):
     table.loc[idx, 'CPUSerialNumber'] = ser_no
     if ARGS.verbose:
         print(f'Adding information to {ARGS.spreadsheet} for float with S/N {ser_no}')
-    aoml_number = table.loc[idx, 'AOML']
-    #FIXME fn_phy0 = f'{PHY_DIR}/{ser_no}/{aoml_number}_{ser_no:06d}_000.phy'
     for ckey, value in calib.items():
         # some keys have different names in the calibration files and in the spreadsheet
         if ckey in calib_to_table:
@@ -548,7 +377,7 @@ def fill_spreadsheet(calib, table, calib_to_table):
             print(f'Not in table: {ckey}')
             if ckey == 'gen_FloatID' and int(calib[ckey]) != ser_no:
                 raise ValueError('Mismatch in float serial numbers!')
-            elif ckey == 'gen_CTD_SN' and calib[ckey] != calib['ctd_SERIALNO']:
+            if ckey == 'gen_CTD_SN' and calib[ckey] != calib['ctd_SERIALNO']:
                 raise ValueError('Mismatch in CTD serial numbers!')
             continue
         if not pd.isna(table.loc[idx, ckey]) and value != table.loc[idx, ckey]:
@@ -557,7 +386,7 @@ def fill_spreadsheet(calib, table, calib_to_table):
                 float_value = float(value)
                 if abs(float_value - table.loc[idx, ckey]) < 1e-6*abs(float_value):
                     is_diff = False
-            except:
+            except ValueError:
                 pass # nothing to change
             if is_diff:
                 print(f'Mismatching values for "{ckey}":')
@@ -569,7 +398,7 @@ def fill_spreadsheet(calib, table, calib_to_table):
                 print('WARNING, overwriting value!')
                 try:
                     value = float(value)
-                except:
+                except ValueError:
                     pass # keep it as a string
                 table.loc[idx, ckey] = value
             else:
@@ -577,7 +406,7 @@ def fill_spreadsheet(calib, table, calib_to_table):
         else:
             try:
                 value = float(value)
-            except:
+            except ValueError:
                 pass # keep it as a string
             table.loc[idx, ckey] = value
         # handle special cases
@@ -587,7 +416,7 @@ def fill_spreadsheet(calib, table, calib_to_table):
             table.loc[idx, 'SIM_first15'] = int(value[0:15])
             table.loc[idx, 'SIM_last4'] = int(value[15:19])
     table.to_excel(ARGS.spreadsheet, index=False)
-    
+
 
 def parse_input_args():
     '''Parse the command line arguments and return them as an object.'''
@@ -641,5 +470,5 @@ if __name__ == '__main__':
         CALIB = read_calibration_ocr(ARGS.calibration_ocr, CALIB)
     if ARGS.general_config:
         CALIB = read_general_config(ARGS.general_config, CALIB)
-    calib_to_table = create_calib_to_table(CALIB, TABLE)
-    fill_spreadsheet(CALIB, TABLE, calib_to_table)
+    CALIB_TO_TABLE = create_calib_to_table()
+    fill_spreadsheet(CALIB, TABLE, CALIB_TO_TABLE)
