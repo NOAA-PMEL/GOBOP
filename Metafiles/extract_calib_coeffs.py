@@ -100,6 +100,7 @@ def create_calib_to_table(calib, table):
     c2t['suna_version'] = 'nitrateSensorVersion'
     c2t['suna_ser_no'] = 'nitrateSensorSerialNumber'
     c2t['ph_ser_no'] = 'phSensorSerialNumber'
+    c2t['ph_serial_number'] = 'phSensorSerialNumber'
     
     return c2t
     
@@ -457,7 +458,12 @@ def read_calibration_ph(fn_calib, calib):
             elif 'k2p' in last_line.lower():
                 calib['ph_k2p_poly_order' ] = contents[1].strip()
         elif len(contents) > 1:
-            calib[f'ph_{contents[0].lower().strip()}'] = contents[1].strip()
+            if contents[0].lower().startswith('ph_'):
+                print(contents)
+                new_key = contents[0].lower().strip()
+            else:
+                new_key = f'ph_{contents[0].lower().strip()}'
+            calib[new_key] = contents[1].strip()
         last_line = line # needed for poly_order
     if ('ph_serial_number' in calib.keys() and
         'ph_isfet_serial_number' in calib.keys()):
