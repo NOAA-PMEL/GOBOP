@@ -482,7 +482,8 @@ def read_calibration_ph(fn_calib, calib):
                 calib['phCalDate'] = f'{contents2[1]:02}/{contents2[0]:02}/' + \
                     contents2[2]
         elif 'poly_order' in line:
-            if 'fp' in last_line.lower():
+            # the first style is for Navis, the second for BGC-S2A
+            if contents[0] == 'ph_fp_poly_order' or 'fp' in last_line.lower():
                 calib['ph_fp_poly_order' ] = contents[1].strip()
             elif 'k2p' in last_line.lower():
                 calib['ph_k2p_poly_order' ] = contents[1].strip() # not really used, right?
@@ -516,7 +517,7 @@ def read_general_config(fn_general_cfg, calib):
             else:
                 lhs = 'gen_' + match_obj.group(1).replace(' ', '_')
                 calib[lhs] = rhs
-                if 'Druck Pressure' in lhs:
+                if 'Druck_Pressure' in lhs:
                     calib['pressureSensorManufacturer'] = 'Druck'
     return calib        
 
@@ -533,6 +534,7 @@ def fill_spreadsheet(calib, table, calib_to_table):
     if not idx:
         raise ValueError('No matching S/N or WMO found')
     ser_no = table.loc[idx, 'serialNumber']
+    table.loc[idx, 'CPUSerialNumber'] = ser_no
     if ARGS.verbose:
         print(f'Adding information to {ARGS.spreadsheet} for float with S/N {ser_no}')
     aoml_number = table.loc[idx, 'AOML']
@@ -578,6 +580,12 @@ def fill_spreadsheet(calib, table, calib_to_table):
             except:
                 pass # keep it as a string
             table.loc[idx, ckey] = value
+        # handle special cases
+        if ckey == 'SIM card':
+            # 19-digit numbers are not stored correctly in spreadsheets
+            # so we store the first 15 and last 4 separately
+            table.loc[idx, 'SIM_first15'] = int(value[0:15])
+            table.loc[idx, 'SIM_last4'] = int(value[15:19])
     table.to_excel(ARGS.spreadsheet, index=False)
     
 
