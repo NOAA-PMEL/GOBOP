@@ -24,11 +24,18 @@ SERVER_JSON = 'ftpserver.json'
 BASE_PATH = '/var/rudics-store/PlatformDir/'
 TIME_GAP = 300 # seconds to wait before processing latest files
 CMD_R2H = '/home/argotest/rudics/server/rudics-rs/target/release/rudics2hex'
+CMD_H2P = '/home/argotest/rudics/Decoder/sio_bgc_parser/process_hex.sh'
 FTP_NAMES = []
 FTP_DIRS = []
 FTP_HOSTS = []
 FTP_USERS = []
 FTP_PW = []
+
+
+def change_cwd(this_dir):
+    '''Change to the specified directory, unless it is None.'''
+    if this_dir:
+        os.chdir(this_dir)
 
 
 def get_float_ids(filename):
@@ -244,6 +251,17 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
                 f_log.write(f'{fn_hex},{shasum},{size},{dst},{now}\n')
 
 
+def convert_hex_to_phy(serial_no):
+    '''Call a script that converts the hex file to flat ASCII files
+    (phy etc.).
+    Return the status of running the command (0: success; >0: error).'''
+    print('here convert_hex_to_phy')
+    fn_log = f'hex2phy_{serial_no}.log'
+    with open(fn_log, 'a', encoding='utf-8') as log_file:
+        result = subprocess.run(CMD_H2P, stdout=log_file)
+    return result.returncode
+
+
 def wait_transmission_complete(serial_no, log):
     '''If RUDICS files are currently coming in, wait until the full
     set of files has been retrieved. Allow a time gap before
@@ -299,7 +317,13 @@ def process_float(serial_no):
         return
     # upload the hex file only if it was changed or missing on ftp server(s)
     if sorted_new_files:
-        upload_hex_ftp(fn_hex, fn_ftp_log) # upload to both servers
+        upload_hex_ftp(fn_hex, fn_ftp_log) # upload latest hex file to both servers
+        status = convert_hex_to_phy(serial_no)
+        if status:
+            print('An error occurred during hex to phy processing')
+        else:
+            # upload flat files to ftp
+            pass
     else:
         # even if no new files were created, we should check if a previously
         # generated hex file was successfully uploaded (an ftp server may
@@ -327,6 +351,8 @@ def parse_input_args():
     parser.add_argument('csv_file',
                         help='name of the csv file with float information')
     # options
+    parser.add_argument('-d', '--directory', type=str, default=None,
+                        help='directory for hex file processing')
     parser.add_argument('-T', '--no_transfer', default=False, action='store_true',
                         help='process only, do not transfer to AOML')
     parser.add_argument('-v', '--verbose', default=False, action='store_true',
@@ -338,5 +364,6 @@ if __name__ == '__main__':
     ARGS = parse_input_args()
     # contents of this dictionary: dict_float_ids[internal_id] = wmoid
     DICT_FLOAT_IDS = get_float_ids(ARGS.csv_file)
+    change_cwd(ARGS.directory)
     for sn in DICT_FLOAT_IDS:
         process_float(sn)
