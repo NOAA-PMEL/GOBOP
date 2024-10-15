@@ -20,7 +20,8 @@ import time
 import shutil
 import pandas as pd
 
-SERVER_JSON = 'ftpserver.json'
+FTP_SERVER_HEX = 'ftpserver_hex.json'
+FTP_SERVER_PHY = 'ftpserver_phy.json'
 BASE_PATH = '/var/rudics-store/PlatformDir/'
 TIME_GAP = 300 # seconds to wait before processing latest files
 CMD_R2H = '/home/argotest/rudics/server/rudics-rs/target/release/rudics2hex'
@@ -178,11 +179,11 @@ def sort_files_mtime(file_list):
     return sorted_files, last_mtime
 
 
-def read_server_info():
+def read_server_info(ftp_server):
     '''Read the information about the ftp server (name, account, and password)
     from the file with the globally defined name.
     Return the information as a dictionary.'''
-    with open(SERVER_JSON, 'r', encoding='utf-8') as file:
+    with open(ftp_server, 'r', encoding='utf-8') as file:
         info = json.load(file)
     return info
 
@@ -244,21 +245,17 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
             print(f'could not upload {fn_gzip}')
         ftp_server.quit()
         if success:
-            shasum = get_checksum(fn_hex)
-            size = os.path.getsize(fn_hex)
-            now = datetime.datetime.now()
-            with open(fn_ftp_log, 'a', encoding='utf-8') as f_log:
-                f_log.write(f'{fn_hex},{shasum},{size},{dst},{now}\n')
+            append_ftp_log(fn_ftp_log, fn_hex, dst)
 
 
 def convert_hex_to_phy(serial_no):
     '''Call a script that converts the hex file to flat ASCII files
-    (phy etc.).
+    (phy etc.). 
     Return the status of running the command (0: success; >0: error).'''
     print('here convert_hex_to_phy')
     fn_log = f'hex2phy_{serial_no}.log'
     with open(fn_log, 'a', encoding='utf-8') as log_file:
-        result = subprocess.run(CMD_H2P, stdout=log_file)
+        result = subprocess.run(CMD_H2P, stdout=log_file, check=True)
     return result.returncode
 
 
@@ -287,6 +284,60 @@ def wait_transmission_complete(serial_no, log):
     return sorted_new_files
 
 
+def append_ftp_log(fn_ftp_log, file_name, destination):
+    '''Append an entry to the ftp log file for the specified
+    file and destination.'''
+    shasum = get_checksum(file_name)
+    size = os.path.getsize(file_name)
+    now = datetime.datetime.now()
+    with open(fn_ftp_log, 'a', encoding='utf-8') as f_log:
+        f_log.write(f'{file_name},{shasum},{size},{destination},{now}\n')
+
+
+def upload_flat_files_ftp(serial_no, fn_ftp_log):
+    '''Upload the phy etc. files to the ftp server(s) specified
+    in FTP_SERVER_PHY.'''
+    server_info = read_server_info(FTP_SERVER_PHY)
+    ftp_log = pd.read_csv(fn_ftp_log)
+    flat_files = glob.glob(f'phy/{serial_no}/???/*.???')
+    # determine which files haven't been uploaded yet
+    new_files = []
+    for file_name in flat_files:
+        # this works only as long as there is only one ftp server!
+        rows_file = ftp_log.loc[ftp_log['Filename'] == file_name]
+        if rows_file.empty: # file not listed in ftp log
+            print(f'need to upload {file_name} for the first time')
+            new_files.append(file_name)
+        else: # compare checksums
+            shasum_ftp = rows_file['Checksum'].values[-1] # most recent upload
+            if get_checksum(file_name) != shasum_ftp:
+                print(f'need to upload revised {file_name}')
+                new_files.append(file_name)
+    for server in server_info:
+        try:
+            ftp_server = connect_ftp(server['server'], server['account'],
+                                     server['password'], secure=True)
+        except ftplib.all_errors:
+            print(f'Warning: connection to {server["server"]} could not be ' +
+                  'established')
+            return
+        for new_file in new_files:
+            print(f'now uploading to {server["server"]}')
+            try:
+                # e.g.: phy/4005/ALK/09674_004005_0029.alk -> ps4005/ALK/...
+                file_out = new_file.replace('phy/', 'ps')
+                with open(new_file, 'rb') as f_ptr:
+                    store_cmd = f'STOR {file_out}'
+                    ftp_server.storbinary(store_cmd, f_ptr)
+                append_ftp_log(fn_ftp_log, new_file, server['institution'])
+            except OSError:
+                print(f'could not read {new_file}')
+            except ftplib.all_errors:
+                print(f'could not upload {new_file}')
+        #ftp_server.retrlines('LIST -R') # FIXME recursive listing doesn't work
+        ftp_server.quit()
+
+
 def process_float(serial_no):
     '''Process the files for one float.
     serial_no: serial number (string)
@@ -294,7 +345,7 @@ def process_float(serial_no):
     fn_log = f'rudics2hex_{serial_no}.log'
     if not os.path.exists(fn_log):
         create_log_file(fn_log)
-    fn_ftp_log = f'ftp_{serial_no}.log'
+    fn_ftp_log = f'{os.getcwd()}/ftp_{serial_no}.log'
     if not os.path.exists(fn_ftp_log):
         create_ftp_log_file(fn_ftp_log)
     log = pd.read_csv(fn_log)
@@ -305,7 +356,8 @@ def process_float(serial_no):
     # wait until a set of transmissions is completed - allow a time gap
     # before actually processing them
     sorted_new_files = wait_transmission_complete(serial_no, log)
-    #FIXME unneeded? wmoid = DICT_FLOAT_IDS[int(serial_no)][0]
+    if sorted_new_files: # FIXME temporary
+        print(f'sorted new files: {sorted_new_files}')
     for file in sorted_new_files:
         full_cmd = [CMD_R2H, '-vvv', '--output', 'hex', 'append', file]
         result = subprocess.run(full_cmd, stdout=subprocess.PIPE, check=True)
@@ -315,20 +367,17 @@ def process_float(serial_no):
         mark_file_processed(file, fn_log)
     if ARGS.no_transfer:
         return
-    # upload the hex file only if it was changed or missing on ftp server(s)
+    cwd = os.getcwd()
+    change_cwd(ARGS.directory)
+    # upload the hex file only if it was changed or is missing on ftp server(s)
     if sorted_new_files:
         upload_hex_ftp(fn_hex, fn_ftp_log) # upload latest hex file to both servers
-        status = convert_hex_to_phy(serial_no)
-        if status:
+        if convert_hex_to_phy(serial_no):
             print('An error occurred during hex to phy processing')
-        else:
-            # upload flat files to ftp
-            pass
     else:
         # even if no new files were created, we should check if a previously
         # generated hex file was successfully uploaded (an ftp server may
         # have been down, for instance)
-        shasum = get_checksum(fn_hex)
         rows_log = ftp_log.loc[ftp_log['Filename'] == fn_hex]
         if rows_log.empty: # file not listed in ftp log
             upload_hex_ftp(fn_hex, fn_ftp_log) # upload to both servers
@@ -339,8 +388,11 @@ def process_float(serial_no):
                     upload_hex_ftp(fn_hex, fn_ftp_log, host)
                 else:
                     shasum_ftp = rows_host['Checksum'].values[-1] # most recent upload
-                    if shasum != shasum_ftp:
+                    if get_checksum(fn_hex) != shasum_ftp:
                         upload_hex_ftp(fn_hex, fn_ftp_log, host)
+    # upload flat files to ftp as necessary (new or changed)
+    upload_flat_files_ftp(serial_no, fn_ftp_log)
+    change_cwd(cwd)
 
 
 def parse_input_args():
@@ -364,6 +416,5 @@ if __name__ == '__main__':
     ARGS = parse_input_args()
     # contents of this dictionary: dict_float_ids[internal_id] = wmoid
     DICT_FLOAT_IDS = get_float_ids(ARGS.csv_file)
-    change_cwd(ARGS.directory)
     for sn in DICT_FLOAT_IDS:
         process_float(sn)
