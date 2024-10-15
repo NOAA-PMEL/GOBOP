@@ -26,11 +26,11 @@ BASE_PATH = '/var/rudics-store/PlatformDir/'
 TIME_GAP = 300 # seconds to wait before processing latest files
 CMD_R2H = '/home/argotest/rudics/server/rudics-rs/target/release/rudics2hex'
 CMD_H2P = '/home/argotest/rudics/Decoder/sio_bgc_parser/process_hex.sh'
-FTP_NAMES = []
-FTP_DIRS = []
-FTP_HOSTS = []
-FTP_USERS = []
-FTP_PW = []
+FTP_NAMES = ['AOML', 'Argos']
+FTP_DIRS = ['phod/incoming/ARGO_FTP/argo/real-time/pmel', 'real-time/pmel']
+FTP_HOSTS = ['ftp.aoml.noaa.gov', 'ftpgate.argosinc.com']
+FTP_USERS = ['argoin', 'argo']
+FTP_PW = ['Tgitfs@L9#go21', 'aX#f5aW!gfPO&']
 
 
 def change_cwd(this_dir):
@@ -368,10 +368,10 @@ def process_float(serial_no):
     if ARGS.no_transfer:
         return
     cwd = os.getcwd()
-    change_cwd(ARGS.directory)
     # upload the hex file only if it was changed or is missing on ftp server(s)
     if sorted_new_files:
         upload_hex_ftp(fn_hex, fn_ftp_log) # upload latest hex file to both servers
+        change_cwd(ARGS.directory)
         if convert_hex_to_phy(serial_no):
             print('An error occurred during hex to phy processing')
     else:
@@ -391,6 +391,7 @@ def process_float(serial_no):
                     if get_checksum(fn_hex) != shasum_ftp:
                         upload_hex_ftp(fn_hex, fn_ftp_log, host)
     # upload flat files to ftp as necessary (new or changed)
+    change_cwd(ARGS.directory)
     upload_flat_files_ftp(serial_no, fn_ftp_log)
     change_cwd(cwd)
 
