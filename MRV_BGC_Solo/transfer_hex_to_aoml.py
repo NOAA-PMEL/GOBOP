@@ -26,11 +26,11 @@ BASE_PATH = '/var/rudics-store/PlatformDir/'
 TIME_GAP = 300 # seconds to wait before processing latest files
 CMD_R2H = '/home/argotest/rudics/server/rudics-rs/target/release/rudics2hex'
 CMD_H2P = '/home/argotest/rudics/Decoder/sio_bgc_parser/process_hex.sh'
-FTP_NAMES = ['AOML', 'Argos']
-FTP_DIRS = ['phod/incoming/ARGO_FTP/argo/real-time/pmel', 'real-time/pmel']
-FTP_HOSTS = ['ftp.aoml.noaa.gov', 'ftpgate.argosinc.com']
-FTP_USERS = ['argoin', 'argo']
-FTP_PW = ['Tgitfs@L9#go21', 'aX#f5aW!gfPO&']
+FTP_NAMES = []
+FTP_DIRS = []
+FTP_HOSTS = []
+FTP_USERS = []
+FTP_PW = []
 
 
 def change_cwd(this_dir):
