@@ -20,12 +20,15 @@ import time
 import shutil
 import pandas as pd
 
+
+
 FTP_SERVER_HEX = 'ftpserver_hex.json'
 FTP_SERVER_PHY = 'ftpserver_phy.json'
 BASE_PATH = '/var/rudics-store/PlatformDir/'
 TIME_GAP = 600 # seconds to wait before processing latest files
 CMD_R2H = '/home/argotest/rudics/server/rudics-rs/target/release/rudics2hex'
 CMD_H2P = '/home/argotest/rudics/Decoder/sio_bgc_parser/process_hex.sh'
+CMD_HT2NC = '/home/argotest/rudics/Python/parse_eng_bgcsolo.py'
 FTP_NAMES = []
 FTP_DIRS = []
 FTP_HOSTS = []
@@ -248,6 +251,40 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
             append_ftp_log(fn_ftp_log, fn_hex, dst)
 
 
+def upload_file_ftp(filename, fn_ftp_log, destination):
+    '''Upload one file to one ftp server.'''
+    if ARGS.verbose:
+        print(f'Now uploading to {destination}: {filename}')
+    idx = FTP_NAMES.index(destination)
+    success = False
+    if destination == 'PMEL':
+        secure = True
+    else:
+        secure = False
+    try:
+        ftp_server = connect_ftp(FTP_HOSTS[idx], FTP_USERS[idx], FTP_PW[idx],
+                                 secure=secure)
+        ftp_server.cwd(FTP_DIRS[idx])
+    except ftplib.all_errors:
+        print('Warning: connection to ftp server could not be established')
+        return
+    try:
+        with open(filename, 'rb') as file:
+            print(f'opened {filename}')
+            fname = os.path.basename(filename) # without the path
+            store_cmd = f'STOR {fname}'
+            ftp_server.storbinary(store_cmd, file)
+        success = True
+        ftp_server.retrlines('LIST') # FIXME shows dir listing, remove eventually!
+    except OSError:
+        print(f'could not read {filename}')
+    except ftplib.all_errors:
+        print(f'could not upload {filename}')
+    ftp_server.quit()
+    if success:
+        append_ftp_log(fn_ftp_log, filename, destination)
+
+
 def convert_hex_to_phy(serial_no):
     '''Call a script that converts the hex file to flat ASCII files
     (phy etc.). 
@@ -345,7 +382,10 @@ def process_float(serial_no):
     fn_log = f'rudics2hex_{serial_no}.log'
     if not os.path.exists(fn_log):
         create_log_file(fn_log)
+    # include the full path
     fn_ftp_log = f'{os.getcwd()}/ftp_{serial_no}.log'
+    if ARGS.verbose:
+        print(fn_ftp_log)
     if not os.path.exists(fn_ftp_log):
         create_ftp_log_file(fn_ftp_log)
     log = pd.read_csv(fn_log)
@@ -369,10 +409,22 @@ def process_float(serial_no):
     # upload the hex file only if it was changed or is missing on ftp server(s)
     if sorted_new_files:
         if not ARGS.no_transfer:
-            upload_hex_ftp(fn_hex, fn_ftp_log) # upload latest hex file to both servers
+            # upload latest hex file to both AOML servers
+            upload_hex_ftp(fn_hex, fn_ftp_log, ['AOML', 'Argos'])
         change_cwd(ARGS.directory)
         if convert_hex_to_phy(serial_no):
             print('An error occurred during hex to phy processing')
+        change_cwd(cwd)
+        # convert engineering html pages to netCDF for ERDDAP
+        full_cmd = [CMD_HT2NC, 'floats.csv', 'web', 'netCDF']
+        result = subprocess.run(full_cmd, stdout=subprocess.PIPE, check=True)
+        print(result.stdout) # stdout can be redirected to file by user
+        if result.returncode:
+            print('WARNING: html2nc command may have failed!')
+        fn_nc = f'netCDF/eng_ps{serial_no}.nc'
+        # currently still uploading to PMEL server if -T is set
+        fn_nc = f'netCDF/eng_ps{serial_no}.nc'
+        upload_file_ftp(fn_nc, fn_ftp_log, 'PMEL')
     elif not ARGS.no_transfer:
         # even if no new files were created, we should check if a previously
         # generated hex file was successfully uploaded (an ftp server may
@@ -381,7 +433,7 @@ def process_float(serial_no):
         if rows_log.empty: # file not listed in ftp log
             upload_hex_ftp(fn_hex, fn_ftp_log) # upload to both servers
         else:
-            for host in FTP_NAMES:
+            for host in FTP_NAMES[0:2]:
                 rows_host = rows_log[rows_log['Destination'] == host]
                 if rows_host.empty:
                     upload_hex_ftp(fn_hex, fn_ftp_log, host)
