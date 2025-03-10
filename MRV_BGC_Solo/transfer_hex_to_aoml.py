@@ -23,7 +23,7 @@ import pandas as pd
 FTP_SERVER_HEX = 'ftpserver_hex.json'
 FTP_SERVER_PHY = 'ftpserver_phy.json'
 BASE_PATH = '/var/rudics-store/PlatformDir/'
-TIME_GAP = 300 # seconds to wait before processing latest files
+TIME_GAP = 600 # seconds to wait before processing latest files
 CMD_R2H = '/home/argotest/rudics/server/rudics-rs/target/release/rudics2hex'
 CMD_H2P = '/home/argotest/rudics/Decoder/sio_bgc_parser/process_hex.sh'
 FTP_NAMES = []
@@ -280,7 +280,7 @@ def wait_transmission_complete(serial_no, log):
             is_new = False
         else:
             print('Waiting a bit, more files may come in...') # VERBOSE
-            time.sleep(TIME_GAP - now + latest_mtime)
+            time.sleep(TIME_GAP)
     return sorted_new_files
 
 
