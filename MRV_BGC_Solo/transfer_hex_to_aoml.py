@@ -147,7 +147,7 @@ def create_ftp_log_file(filename_ftp_log):
     uploaded to AOML yet. Raise an IOError if the file cannot be created.'''
     try:
         with open(filename_ftp_log, 'w', encoding='utf-8') as file:
-            file.write('Filename,Checksum,Size,Upload_date\n')
+            file.write('Filename,Checksum,Size,Destination,Upload_date\n')
     except Exception as exc:
         raise IOError(f'ERROR: Could not create "{filename_ftp_log}"!') from exc
 
