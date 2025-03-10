@@ -21,7 +21,6 @@ import shutil
 import pandas as pd
 
 
-
 FTP_SERVER_HEX = 'ftpserver_hex.json'
 FTP_SERVER_PHY = 'ftpserver_phy.json'
 BASE_PATH = '/var/rudics-store/PlatformDir/'
@@ -224,6 +223,8 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
     fn_gzip += '.gz'
     if not destination:
         dest = FTP_NAMES
+    elif isinstance(destination, list):
+        dest = destination
     else:
         dest = [destination]
     for dst in dest:
@@ -418,9 +419,8 @@ def process_float(serial_no):
     if sorted_new_files:
         if not ARGS.no_transfer:
             # upload latest hex file to both AOML servers
-            upload_hex_ftp(fn_hex, fn_ftp_log, 'AOML')
-            upload_hex_ftp(fn_hex, fn_ftp_log, 'Argos')
-            # also upload it ot Google Drive
+            upload_hex_ftp(fn_hex, fn_ftp_log, ['AOML', 'Argos'])
+            # also upload it to Google Drive
             full_cmd = [CMD_H2GD, 'up', fn_hex, 'PMEL-BGC-S2A/']
             result = subprocess.run(full_cmd, stdout=subprocess.PIPE, check=True)
             print(result.stdout) # stdout can be redirected to file by user
@@ -446,9 +446,9 @@ def process_float(serial_no):
         # generated hex file was successfully uploaded (an ftp server may
         # have been down, for instance)
         rows_log = ftp_log.loc[ftp_log['Filename'] == fn_hex]
-        if rows_log.empty: # file not listed in ftp log # upload to both servers
-            upload_hex_ftp(fn_hex, fn_ftp_log, 'AOML')
-            upload_hex_ftp(fn_hex, fn_ftp_log, 'Argos')
+        if rows_log.empty: # file not listed in ftp log
+            # upload latest hex file to both AOML servers
+            upload_hex_ftp(fn_hex, fn_ftp_log, ['AOML', 'Argos'])
         else:
             for host in FTP_NAMES[0:2]:
                 rows_host = rows_log[rows_log['Destination'] == host]
