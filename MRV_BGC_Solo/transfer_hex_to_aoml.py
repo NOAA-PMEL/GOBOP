@@ -230,8 +230,13 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
         print(f'Now uploading to {dst}: {fn_gzip}')
         idx = FTP_NAMES.index(dst)
         success = False
+        if dst == 'PMEL':
+            secure = True
+        else:
+            secure = False
         try:
-            ftp_server = connect_ftp(FTP_HOSTS[idx], FTP_USERS[idx], FTP_PW[idx])
+            ftp_server = connect_ftp(FTP_HOSTS[idx], FTP_USERS[idx], FTP_PW[idx],
+                                     secure=secure)
             ftp_server.cwd(FTP_DIRS[idx])
         except ftplib.all_errors:
             print('Warning: connection to ftp server could not be established')
@@ -413,8 +418,9 @@ def process_float(serial_no):
     if sorted_new_files:
         if not ARGS.no_transfer:
             # upload latest hex file to both AOML servers
-            upload_hex_ftp(fn_hex, fn_ftp_log, ['AOML', 'Argos'])
-            # also upload it to Google Drive
+            upload_hex_ftp(fn_hex, fn_ftp_log, 'AOML')
+            upload_hex_ftp(fn_hex, fn_ftp_log, 'Argos')
+            # also upload it ot Google Drive
             full_cmd = [CMD_H2GD, 'up', fn_hex, 'PMEL-BGC-S2A/']
             result = subprocess.run(full_cmd, stdout=subprocess.PIPE, check=True)
             print(result.stdout) # stdout can be redirected to file by user
@@ -440,8 +446,9 @@ def process_float(serial_no):
         # generated hex file was successfully uploaded (an ftp server may
         # have been down, for instance)
         rows_log = ftp_log.loc[ftp_log['Filename'] == fn_hex]
-        if rows_log.empty: # file not listed in ftp log
-            upload_hex_ftp(fn_hex, fn_ftp_log) # upload to both servers
+        if rows_log.empty: # file not listed in ftp log # upload to both servers
+            upload_hex_ftp(fn_hex, fn_ftp_log, 'AOML')
+            upload_hex_ftp(fn_hex, fn_ftp_log, 'Argos')
         else:
             for host in FTP_NAMES[0:2]:
                 rows_host = rows_log[rows_log['Destination'] == host]
