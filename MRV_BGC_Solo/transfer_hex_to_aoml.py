@@ -45,9 +45,9 @@ def get_float_ids(filename):
     and return a dictionary with the internal IDs as keys and the WMO IDs
     as the values.'''
     float_info = pd.read_csv(filename)
-    internal_ids = float_info['Float ID'].values
-    wmo_ids = float_info['Float WMO'].values
-    aoml_ids = float_info['AOML'].values
+    internal_ids = float_info['Float_ID'].values
+    wmo_ids = float_info['WMOID'].values
+    aoml_ids = float_info['AOML_ID'].values
     result_dict = {key: (val1, val2) for key, val1, val2 in
             zip(internal_ids, wmo_ids, aoml_ids)}
     return result_dict
