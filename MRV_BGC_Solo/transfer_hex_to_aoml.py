@@ -29,6 +29,8 @@ TIME_GAP = 600 # seconds to wait before processing latest files
 CMD_R2H = '/home/argotest/rudics/server/rudics-rs/target/release/rudics2hex'
 CMD_H2P = '/home/argotest/rudics/Decoder/sio_bgc_parser/process_hex.sh'
 CMD_HT2NC = '/home/argotest/rudics/Python/parse_eng_bgcsolo.py'
+CMD_H2GD = '/home/argotest/rudics/Python/drivemaster'
+
 FTP_NAMES = []
 FTP_DIRS = []
 FTP_HOSTS = []
@@ -305,7 +307,7 @@ def wait_transmission_complete(serial_no, log):
     while is_new:
         rudics_files = glob.glob(f'{BASE_PATH}{serial_no}/inbox/*.rudics')
         if ARGS.verbose:
-            print(f'{len(rudics_files)} *.rudics files found in the inbox')
+            print(f'{len(rudics_files)} *.rudics files found in the inbox of {serial_no}')
         new_rudics_files = []
         for file in rudics_files:
             do_process = check_conv_need_file(file, log)
@@ -350,6 +352,8 @@ def upload_flat_files_ftp(serial_no, fn_ftp_log):
             if get_checksum(file_name) != shasum_ftp:
                 print(f'need to upload revised {file_name}')
                 new_files.append(file_name)
+    if not new_files:
+        return
     for server in server_info:
         try:
             ftp_server = connect_ftp(server['server'], server['account'],
@@ -371,7 +375,6 @@ def upload_flat_files_ftp(serial_no, fn_ftp_log):
                 print(f'could not read {new_file}')
             except ftplib.all_errors:
                 print(f'could not upload {new_file}')
-        #ftp_server.retrlines('LIST -R') # FIXME recursive listing doesn't work
         ftp_server.quit()
 
 
@@ -411,7 +414,14 @@ def process_float(serial_no):
         if not ARGS.no_transfer:
             # upload latest hex file to both AOML servers
             upload_hex_ftp(fn_hex, fn_ftp_log, ['AOML', 'Argos'])
+            # also upload it to Google Drive
+            full_cmd = [CMD_H2GD, 'up', fn_hex, 'PMEL-BGC-S2A/']
+            result = subprocess.run(full_cmd, stdout=subprocess.PIPE, check=True)
+            print(result.stdout) # stdout can be redirected to file by user
+            if result.returncode:
+               print('WARNING: upload of hex file to Google Drive may have failed!')
         change_cwd(ARGS.directory)
+
         if convert_hex_to_phy(serial_no):
             print('An error occurred during hex to phy processing')
         change_cwd(cwd)
@@ -425,7 +435,7 @@ def process_float(serial_no):
         # currently still uploading to PMEL server if -T is set
         fn_nc = f'netCDF/eng_ps{serial_no}.nc'
         upload_file_ftp(fn_nc, fn_ftp_log, 'PMEL')
-    elif not ARGS.no_transfer:
+    elif not ARGS.no_transfer and os.path.exists(fn_hex):
         # even if no new files were created, we should check if a previously
         # generated hex file was successfully uploaded (an ftp server may
         # have been down, for instance)
