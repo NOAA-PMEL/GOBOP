@@ -365,16 +365,15 @@ def process_float(serial_no):
         if result.returncode:
             print('WARNING: rudics2hex command may have failed!')
         mark_file_processed(file, fn_log)
-    if ARGS.no_transfer:
-        return
     cwd = os.getcwd()
     # upload the hex file only if it was changed or is missing on ftp server(s)
     if sorted_new_files:
-        upload_hex_ftp(fn_hex, fn_ftp_log) # upload latest hex file to both servers
+        if not ARGS.no_transfer:
+            upload_hex_ftp(fn_hex, fn_ftp_log) # upload latest hex file to both servers
         change_cwd(ARGS.directory)
         if convert_hex_to_phy(serial_no):
             print('An error occurred during hex to phy processing')
-    else:
+    elif not ARGS.no_transfer:
         # even if no new files were created, we should check if a previously
         # generated hex file was successfully uploaded (an ftp server may
         # have been down, for instance)
@@ -392,7 +391,8 @@ def process_float(serial_no):
                         upload_hex_ftp(fn_hex, fn_ftp_log, host)
     # upload flat files to ftp as necessary (new or changed)
     change_cwd(ARGS.directory)
-    upload_flat_files_ftp(serial_no, fn_ftp_log)
+    if not ARGS.no_transfer:
+        upload_flat_files_ftp(serial_no, fn_ftp_log)
     change_cwd(cwd)
 
 
