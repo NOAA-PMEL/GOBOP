@@ -333,7 +333,14 @@ def create_nc_one_variable(nc_out, this_dict, var, ftype, use_number=False):
             fill_val = -999
         elif isinstance(this_dict[var][0], float):
             var_type = 'f4'
-            fill_val = -999.0
+            if var == 'Iridium_Lat':
+                fill_val = -99.99
+            elif var == 'Iridium_Long':
+                fill_val = -999.99
+            elif var == 'Iridium_Err':
+                fill_val = 999.0
+            else:
+                fill_val = -999.0
         elif isinstance(this_dict[var][0], str):
             var_type = str
             #fill_val = ''
