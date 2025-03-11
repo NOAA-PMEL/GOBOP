@@ -22,8 +22,10 @@ from netCDF4 import Dataset
 
 import pdb
 
-FILE_TYPES = ['CTD', 'ALK', 'DOX', 'ECO', 'Na3', 'Nb3', 'Nc3', 'OCR',
+FILE_TYPES = ['CTD', 'ALK', 'DOX', 'ECO', 'Na3', 'Nb3', 'OCR',
               'en1', 'en2', 'en3', 'en4', 'en5', 'gps', 'pmp']
+#FILE_TYPES = ['pmp']
+#FILE_TYPES = ['CTD']
 CTD_COLUMNS = ['Cycle', 'Status', 'numErr', 'volt', 'pres',
                'ma0', 'ma1', 'ma2', 'ma3']
 ALK_COLUMNS = ['Cycle', 'Status', 'numErr', 'volt', 'maMax', 'maAvg',
@@ -281,6 +283,9 @@ def parse_file(file_path, ftype, serial_no):
                         #DEBUG print(f'using int for {match_obj.group(1)}')
                 file_info[columns[col_count]].append(value)
                 col_count += 1
+
+    #DEBUG print(file_info)
+    #DEBUG pdb.set_trace()
     return file_info
 
 
@@ -291,13 +296,29 @@ def check_cycle_exists(nc_out):
         var = nc_out.variables['Cycle']
         return True
     except KeyError:
-        #print('exception: ', type(e).__name__)
-        #pdb.set_trace()
         return False
+
+def get_var_name_units_nc(var):
+    '''Create a netCDF-compatible variable name and possibly extract the units
+    from the variable name used in the html files.'''
+    # for output, replace multiple spaces with single space
+    regex_units = re.compile(r'[\w\s]+\(([\w/%]+)\)')
+    var = ' '.join(var.split())
+    var = var.replace('#', 'Num').replace('>', '_gt_')
+    units = None # default
+    if ' ' in var:
+        match_obj = regex_units.search(var)
+        if not match_obj:
+            var = var.replace(' ', '_')
+        else:
+            units = match_obj.group(1)
+            unit_str = f'({units})'
+            var = var.replace(unit_str, '').strip().replace(' ', '_')
+    return var, units
+
 
 def create_nc_one_variable(nc_out, this_dict, var, ftype, use_number=False):
     '''Create one variable in the netCDF output file.'''
-    regex_units = re.compile(r'[\w\s]+\(([\w/%]+)\)')
     # There is only one Cycle variable for the file that is
     # used for all sensors
     #print(f'create {var}')
@@ -309,31 +330,24 @@ def create_nc_one_variable(nc_out, this_dict, var, ftype, use_number=False):
         # FIXME not checking for length
         if isinstance(this_dict[var][0], int):
             var_type = 'i4'
+            fill_val = -999
         elif isinstance(this_dict[var][0], float):
             var_type = 'f4'
+            fill_val = -999.0
         elif isinstance(this_dict[var][0], str):
             var_type = str
+            #fill_val = ''
         else:
             print('not yet coded')
             pdb.set_trace()
     elif isinstance(this_dict[var], float):
         var_type = 'f4'
+        fill_val = -999.0
     else:
         print('also not yet coded')
         pdb.set_trace()
 
-    # for output, replace multiple spaces with single space
-    var = ' '.join(var.split())
-    var = var.replace('#', 'Num').replace('>','_gt_')
-    units = None # default
-    if ' ' in var:
-        match_obj = regex_units.search(var)
-        if not match_obj:
-            var = var.replace(' ', '_')
-        else:
-            units = match_obj.group(1)
-            unit_str = f'({units})'
-            var = var.replace(unit_str, '').strip().replace(' ', '_')
+    var, units =  get_var_name_units_nc(var)
     var_name = f'{ftype}_{var}'
     if var_name == 'pmp_time':
         var_name = 'JULD'
@@ -342,9 +356,15 @@ def create_nc_one_variable(nc_out, this_dict, var, ftype, use_number=False):
         nc_out.createVariable(var_name, var_type, ('N_PROF','STRING'))
     else:
         if use_number:
-            v = nc_out.createVariable(var_name, var_type, ('N_PROF', 'Number'))
+            v = nc_out.createVariable(var_name, var_type, ('N_PROF', 'Number'),
+                                      fill_value=fill_val)
         else:
-            v = nc_out.createVariable(var_name, var_type, ('N_PROF'))
+            v = nc_out.createVariable(var_name, var_type, ('N_PROF'),
+                                      fill_value=fill_val)
+            if var_name == 'JULD':
+                v.long_name = 'Julian day (UTC) of the station relative to REFERENCE_DATE_TIME'
+                v.units = 'days since 1950-01-01 00:00:00 UTC'
+                v.standard_name = 'time'
     if units:
         v.units = units
 
@@ -359,22 +379,16 @@ def create_nc_pmp_vars(nc_out, file_info_pmp):
     nc_out.createDimension('Number', 20) # fairly conservative upper bound
     # all cycles should have the same columns, doesn't matter which one we pick
     first_key = next(iter(file_info_pmp))
-    #print(first_key)
     this_dict = file_info_pmp[first_key]
     its_vars = file_info_pmp[first_key].keys()
-    #print(its_vars)
     # most or all of these variables need Number as a second dim, so
     # I can't use the same code as for the other file types!
     for var in its_vars:
-        #print(var)
-        if var == 'Number':
-            continue # this is a dimension, not a variable
-        elif var == 'Total Cumulative Energy' or var == 'Average_Energy':
+        if var == 'Total Cumulative Energy' or var == 'Average_Energy':
             use_number = False
         else:
             use_number = True
         create_nc_one_variable(nc_out, this_dict, var, 'pmp', use_number)
-
 
 
 def create_nc_file(filename_out, full_file_info):
@@ -386,7 +400,16 @@ def create_nc_file(filename_out, full_file_info):
             time.ctime(time.time())
         nc_out.update = time.ctime(time.time())
         nc_out.createDimension('N_PROF', None) # unlimited dim
-        nc_out.createDimension('STRING', 1)
+        #NOT USED AT THIS POINT nc_out.createDimension('STRING', 1)
+        lon = nc_out.createVariable('LONGITUDE', 'f4', ('N_PROF'),
+                              fill_value=-999.0)
+        lon.standard_name = 'longitude'
+        lon.units = 'degrees_east'
+        lat = nc_out.createVariable('LATITUDE', 'f4', ('N_PROF'),
+                              fill_value=-999.0)
+        lat.standard_name = 'latitude'
+        lat.units = 'degrees_north'
+
         for ftype in full_file_info.keys():
             print(f'Processing {ftype} file') #DEBUG
             if ftype == 'pmp':
@@ -396,7 +419,7 @@ def create_nc_file(filename_out, full_file_info):
                 its_vars = this_dict.keys()
                 for var in its_vars:
                     create_nc_one_variable(nc_out, this_dict, var, ftype)
-
+        nc_out.close()
         return True # success
     except Exception as exc:
         print(f'An error occurred while writing file {filename_out}')
@@ -404,6 +427,100 @@ def create_nc_file(filename_out, full_file_info):
         print(exc)
         pdb.set_trace()
         return False
+
+def write_pmp_nc(nc_out, file_info_pmp):
+    '''Write the pmp-related information to the netCDF file.'''
+    its_cycles = list(file_info_pmp.keys())
+    n_cycles = len(its_cycles)
+    out_vars = {'time': 'JULD',
+                'Total Cumulative Energy': 'pmp_Total_Cumulative_Energy',
+                'Average_Energy': 'pmp_Average_Energy'}
+
+    while its_cycles:
+        min_cycle = min(its_cycles)
+        file_cycles = nc_out['Cycle'][:]
+        if min_cycle not in file_cycles:
+            cyc_idx = len(file_cycles)
+            nc_out['Cycle'][cyc_idx] = min_cycle
+        else:
+            cyc_idx = np.where(file_cycles == min_cycle)[0].item()
+        for var in file_info_pmp[min_cycle].keys():
+            values = file_info_pmp[min_cycle][var]
+            if var in out_vars.keys():
+                nc_out[out_vars[var]][cyc_idx] = values
+                continue
+            n_values = len(values)
+            if var == 'Number':
+                file_numbers = nc_out['pmp_Number'][cyc_idx][:]
+                if not np.ma.is_masked(file_numbers[0]):
+                    print('why is Number set already?')
+                    pdb.set_trace()
+            nc_var = get_var_name_units_nc(var)[0]
+            full_var = f'pmp_{nc_var}'
+            nc_out[full_var][cyc_idx,0:n_values] = values
+        its_cycles.remove(min_cycle)
+
+
+def write_nc_file(filename_out, full_file_info):
+    '''Write all information to the netCDF file for one float.'''
+    print(f'Writing to {filename_out}')
+    nc_out = Dataset(filename_out, 'a')
+    ftypes = full_file_info.keys()
+    for ftype in ftypes:
+        if ftype == 'pmp':
+            write_pmp_nc(nc_out, full_file_info[ftype])
+            continue
+        if 'Cycle' not in full_file_info[ftype].keys():
+            print(f'"Cycle" not found in "{ftype}", cannot process!')
+            pdb.set_trace()
+            continue
+        its_cycles = full_file_info[ftype]['Cycle']
+        n_cycles = len(its_cycles)
+        vars = full_file_info[ftype].keys()
+        #success = True
+        for var in vars:
+            if len(full_file_info[ftype][var]) != n_cycles:
+                #DEBUG print(f'Variable "{var}" has unexpected length in "{ftype}"!')
+                if len(full_file_info[ftype][var]):
+                    if isinstance(full_file_info[ftype][var][0], int):
+                        fill_val = -999
+                    elif isinstance(full_file_info[ftype][var][0], float):
+                        fill_val = -999.0
+                    else:
+                        print('is it a string?')
+                        pdb.set_trace()
+                for i in range(len(full_file_info[ftype][var]), n_cycles):
+                    full_file_info[ftype][var].append(fill_val)
+        #if not success:
+        #    continue # do not process this file's variables
+        while its_cycles:
+            min_cycle = min(its_cycles)
+            min_cycle_index = its_cycles.index(min_cycle)
+            file_cycles = nc_out['Cycle'][:]
+            if min_cycle not in file_cycles:
+                cyc_idx = len(file_cycles)
+                nc_out['Cycle'][cyc_idx] = min_cycle
+            else:
+                cyc_idx = np.where(file_cycles == min_cycle)[0].item()
+            for var in vars:
+                if var == 'Cycle':
+                    continue
+                else:
+                    nc_var = get_var_name_units_nc(var)[0]
+                full_var = f'{ftype}_{nc_var}'
+                nc_out[full_var][cyc_idx] = \
+                    full_file_info[ftype][var][min_cycle_index]
+                # create copies for standardized lon/lat variables
+                if full_var == 'gps_First_Lat':
+                    nc_out['LATITUDE'][cyc_idx] = \
+                        full_file_info[ftype][var][min_cycle_index]
+                elif full_var == 'gps_First_Long':
+                    nc_out['LONGITUDE'][cyc_idx] = \
+                        full_file_info[ftype][var][min_cycle_index]
+
+            its_cycles.remove(min_cycle)
+    nc_out.close()
+
 
 def process_float(serial_no):
     '''Process the files for one float.
@@ -421,15 +538,14 @@ def process_float(serial_no):
 
     # create netCDF file with full_file_info
     fn_nc = f'{ARGS.directory_out}/eng_ps{serial_no}.nc'
-    #if not os.path.exists(fn_nc): FIXME
     if not create_nc_file(fn_nc, full_file_info):
         print('failed to create the file')
         return
 
     # no, not so simple! should have another function that writes
     # one cycle, needs to go through what's available across
-    # variables, and what's in file already
-    #write_nc_file(fn_nc)
+    # variables
+    write_nc_file(fn_nc, full_file_info)
     
 
 def get_float_ids(filename):
