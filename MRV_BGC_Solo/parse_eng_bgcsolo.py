@@ -9,6 +9,7 @@ FIXME
 '''
 
 import argparse
+import datetime
 import os
 import re
 import time
@@ -22,8 +23,7 @@ from netCDF4 import Dataset
 import pdb
 
 FILE_TYPES = ['CTD', 'ALK', 'DOX', 'ECO', 'Na3', 'Nb3', 'Nc3', 'OCR',
-              'en1', 'en2', 'en3', 'en4', 'en5', 'gps'] # FIXME, 'pmp']
-FILE_TYPES = ['pmp']
+              'en1', 'en2', 'en3', 'en4', 'en5', 'gps', 'pmp']
 CTD_COLUMNS = ['Cycle', 'Status', 'numErr', 'volt', 'pres',
                'ma0', 'ma1', 'ma2', 'ma3']
 ALK_COLUMNS = ['Cycle', 'Status', 'numErr', 'volt', 'maMax', 'maAvg',
@@ -64,7 +64,7 @@ gps_COLUMNS = ['Cycle', 'First_Lat', 'First_Long', 'First_CycT', 'First_OK',
                'Iridium_Lat', 'Iridium_Long', 'Iridium_Err']
 pmp_COLUMNS = ['Number', 'Code', 'Pressure (db)', 'Time (s)', 'Voltage (V)',
                'Current (ma)', 'Energy (J)', 'Cumulative  Energy (KJ)',
-               'Vacuum0 (load-start)', 'Vacuum1 (load-stop)']
+               'Vacuum0_load_start', 'Vacuum1_load_stop']
 FLOAT_COLUMNS = ['volt', 'pres', 'Vrs', 'Vk', 'lk', 'lb', 'doPh', 'thmV',
                  'DO', 'thmC', 'J_rh', 'J_volt', 'J_amps', 'J_no3',
                  'First_Lat', 'First_Long', 'First_CycT', 'Last_Lat',
@@ -116,6 +116,23 @@ def get_column_names(ftype):
     return columns
 
 
+def get_juld(match_obj):
+    '''Extract the date and time from a string like
+    "22/ 1/2025 20:46: 1", i.e., D/M/YYYY H:MM:SS
+    Return fractional days since Jan 1, 1950 (Argo time convention).
+    '''
+    day = int(match_obj.group(1))
+    month = int(match_obj.group(2))
+    year = int(match_obj.group(3))
+    hour = int(match_obj.group(4))
+    minute = int(match_obj.group(5))
+    second = int(match_obj.group(6))
+    dtime = datetime.datetime(year, month, day, hour, minute, second)
+    # use Argo convention: days since 1950/1/1
+    juld = (dtime - datetime.datetime(1950,1,1)).total_seconds() / 86400
+    return juld
+
+
 def parse_pmp_file(lines, serial_no):
     '''FIXME
     '''
@@ -123,28 +140,33 @@ def parse_pmp_file(lines, serial_no):
     columns = get_column_names('pmp')
     do_parse = False
     get_avg = False
-    regex_cycle = re.compile(r'>Cycle\s+(\d+)\s+GMT')
+    regex_cycle = re.compile(r'>Cycle\s+(\d+)\s+GMT\s+([\d\s/:]+)')
     regex_td = re.compile(r'<t[dh] align="center">(.+)</t[dh]>')
     regex_ce = re.compile(r'\s*([\d\.]+)\s*/\s*([\d\.]+)')
     regex_avg = re.compile(r'<B>\s*([\d\.]+)\s*\(KJ/cycle\)\s*</B>')
+    regex_datetime = re.compile(r'(\d+)/\s*(\d+)/(\d+)\s+(\d+):\s*(\d+):\s*(\d)')
     for line in lines:
-        line = line.replace('<br>', ' ')
+        if 'Vacuum' in line:
+            line = line.replace('<br>', '_').replace('(load-', 'load_')
+            line = line.replace(')', '')
+        else:
+            line = line.replace('<br>', ' ')
         if 'Cycle' in line and 'GMT' in line:
-            print(line)
             match_obj = regex_cycle.search(line)
-            print(match_obj)
             if match_obj:
                 cycle = int(match_obj.group(1))
-                print(f'Cycle: {cycle}')
+                #DEBUG print(f'Cycle: {cycle}')
                 col_count = 0
                 col_count_header = 0 # each Cycle block has the column names
                 do_parse = True
                 file_info[cycle] = {}
                 for col in columns:
                     file_info[cycle][col] = []
+                match_obj_datetime = regex_datetime.search(match_obj.group(2))
+                file_info[cycle]['time'] = get_juld(match_obj_datetime)
         elif do_parse:
-            if '</table>' in line: # end of this cycle
-                do_parse = False
+            if '</table>' in line:
+                do_parse = False # end of this cycle
                 continue
             match_obj = regex_td.search(line)
             if not match_obj:
@@ -159,7 +181,7 @@ def parse_pmp_file(lines, serial_no):
                 get_avg = True    
             else:
                 str_value = match_obj.group(1)
-                print(f'str_value: {str_value}')
+                #print(f'str_value: {str_value}')
                 if get_avg:
                     match_obj = regex_avg.search(str_value)
                     file_info[cycle]['Average_Energy'] = float(match_obj.group(1))
@@ -178,7 +200,8 @@ def parse_pmp_file(lines, serial_no):
                     file_info[cycle][columns[col_count]].append(int(str_value))
                 col_count += 1    
     return file_info            
-                
+
+
 def parse_file(file_path, ftype, serial_no):
     '''Parse one file and extract the information from the
     columns.'''
@@ -192,8 +215,8 @@ def parse_file(file_path, ftype, serial_no):
     with open(file_path) as f_in:
         lines = f_in.readlines()
     if ftype == 'pmp':
-        file_info['pmp'] = parse_pmp_file(lines, serial_no)
-        pdb.set_trace()
+        return parse_pmp_file(lines, serial_no)
+
     do_parse = False
     regex_bist = re.compile(r'Serial=\s*(\d+)\s+WMO=\s*(\d+)')
     # note that en* files use 'th', others use 'td'
@@ -201,7 +224,7 @@ def parse_file(file_path, ftype, serial_no):
     col_count_header = 0
     for line in lines:
         if 'Serial' in line and 'WMO' in line:
-            print(line)
+            #DEBUG print(line)
             match_obj = regex_bist.search(line)
             if match_obj:
                 if int(match_obj.group(1)) != serial_no:
@@ -237,8 +260,7 @@ def parse_file(file_path, ftype, serial_no):
             
             if col_count_header < len(columns):
                 if match_str == columns[col_count_header]:
-                    # DEBUG
-                    print(f'{columns[col_count_header]} found')
+                    # DEBUG print(f'{columns[col_count_header]} found')
                     col_count_header += 1
             else:
                 str_value = match_obj.group(1)
@@ -262,11 +284,102 @@ def parse_file(file_path, ftype, serial_no):
     return file_info
 
 
+def check_cycle_exists(nc_out):
+    '''Check if the 'Cycle' variable exists in the given netCDF file exists
+    already. Return True or False.'''
+    try:
+        var = nc_out.variables['Cycle']
+        return True
+    except KeyError:
+        #print('exception: ', type(e).__name__)
+        #pdb.set_trace()
+        return False
+
+def create_nc_one_variable(nc_out, this_dict, var, ftype, use_number=False):
+    '''Create one variable in the netCDF output file.'''
+    regex_units = re.compile(r'[\w\s]+\(([\w/%]+)\)')
+    # There is only one Cycle variable for the file that is
+    # used for all sensors
+    #print(f'create {var}')
+    if var == 'Cycle':
+        if not check_cycle_exists(nc_out):
+            nc_out.createVariable('Cycle', 'i4', ('N_PROF'))
+        return
+    if isinstance(this_dict[var], list):
+        # FIXME not checking for length
+        if isinstance(this_dict[var][0], int):
+            var_type = 'i4'
+        elif isinstance(this_dict[var][0], float):
+            var_type = 'f4'
+        elif isinstance(this_dict[var][0], str):
+            var_type = str
+        else:
+            print('not yet coded')
+            pdb.set_trace()
+    elif isinstance(this_dict[var], float):
+        var_type = 'f4'
+    else:
+        print('also not yet coded')
+        pdb.set_trace()
+
+    # for output, replace multiple spaces with single space
+    var = ' '.join(var.split())
+    var = var.replace('#', 'Num').replace('>','_gt_')
+    units = None # default
+    if ' ' in var:
+        match_obj = regex_units.search(var)
+        if not match_obj:
+            var = var.replace(' ', '_')
+        else:
+            units = match_obj.group(1)
+            unit_str = f'({units})'
+            var = var.replace(unit_str, '').strip().replace(' ', '_')
+    var_name = f'{ftype}_{var}'
+    if var_name == 'pmp_time':
+        var_name = 'JULD'
+        use_number = False
+    if var_type == str:
+        nc_out.createVariable(var_name, var_type, ('N_PROF','STRING'))
+    else:
+        if use_number:
+            v = nc_out.createVariable(var_name, var_type, ('N_PROF', 'Number'))
+        else:
+            v = nc_out.createVariable(var_name, var_type, ('N_PROF'))
+    if units:
+        v.units = units
+
+
+def create_nc_pmp_vars(nc_out, file_info_pmp):
+    '''Create the pmp-related variables in the netCDF output file.'''
+    if len(file_info_pmp.keys()) == 0:
+        return
+    # pmp files do not have 'Cycle' as a variable like the other files
+    if not check_cycle_exists(nc_out):
+        nc_out.createVariable('Cycle', 'i4', ('N_PROF'))
+    nc_out.createDimension('Number', 20) # fairly conservative upper bound
+    # all cycles should have the same columns, doesn't matter which one we pick
+    first_key = next(iter(file_info_pmp))
+    #print(first_key)
+    this_dict = file_info_pmp[first_key]
+    its_vars = file_info_pmp[first_key].keys()
+    #print(its_vars)
+    # most or all of these variables need Number as a second dim, so
+    # I can't use the same code as for the other file types!
+    for var in its_vars:
+        #print(var)
+        if var == 'Number':
+            continue # this is a dimension, not a variable
+        elif var == 'Total Cumulative Energy' or var == 'Average_Energy':
+            use_number = False
+        else:
+            use_number = True
+        create_nc_one_variable(nc_out, this_dict, var, 'pmp', use_number)
+
+
+
 def create_nc_file(filename_out, full_file_info):
     '''Create the netCDF file for one float with all dimensions and variables.'''
-    print(f'Creating {filename_out}')
-    regex_units = re.compile(r'\w+\s+\(([\w/%]+)\)')
-    cycle_found = False
+    print(f'Creating {filename_out}') 
     try:
         nc_out = Dataset(filename_out, 'w', format='NETCDF4')
         nc_out.history = 'Created with parse_eng_bgcsolo.py on ' + \
@@ -275,46 +388,14 @@ def create_nc_file(filename_out, full_file_info):
         nc_out.createDimension('N_PROF', None) # unlimited dim
         nc_out.createDimension('STRING', 1)
         for ftype in full_file_info.keys():
-            #DEBUG print(f'Processing {ftype}')
-            this_dict = full_file_info[ftype]
-            its_vars = this_dict.keys()
-            for var in its_vars:
-                if var == 'Cycle':
-                    if not cycle_found:
-                        nc_out.createVariable('Cycle', 'i4', ('N_PROF'))
-                        cycle_found = True # only one Cycle variable
-                    continue
-                if isinstance(this_dict[var], list):
-                    # FIXME not checking for length
-                    if isinstance(this_dict[var][0], int):
-                        var_type = 'i4'
-                    elif isinstance(this_dict[var][0], float):
-                        var_type = 'f4'
-                    elif isinstance(this_dict[var][0], str):
-                        var_type = str
-                    else:
-                        print('not yet coded')
-                        pdb.set_trace()
-
-                # for output, replace multiple spaces with single space
-                var = ' '.join(var.split())
-                var = var.replace('#', 'Num').replace('>','_gt_')
-                units = None # default
-                if ' ' in var:
-                    match_obj = regex_units.search(var)
-                    if not match_obj:
-                        var = var.replace(' ', '_')
-                    else:
-                        units = match_obj.group(1)
-                        unit_str = f'({units})'
-                        var = var.replace(unit_str, '').strip()
-                var_name = f'{ftype}_{var}'        
-                if var_type == str:
-                    nc_out.createVariable(var_name, var_type, ('N_PROF','STRING'))
-                else:
-                    v = nc_out.createVariable(var_name, var_type, ('N_PROF'))
-                if units:
-                    v.units = units
+            print(f'Processing {ftype} file') #DEBUG
+            if ftype == 'pmp':
+                create_nc_pmp_vars(nc_out, full_file_info[ftype])
+            else:
+                this_dict = full_file_info[ftype]
+                its_vars = this_dict.keys()
+                for var in its_vars:
+                    create_nc_one_variable(nc_out, this_dict, var, ftype)
 
         return True # success
     except Exception as exc:
@@ -323,7 +404,7 @@ def create_nc_file(filename_out, full_file_info):
         print(exc)
         pdb.set_trace()
         return False
-    
+
 def process_float(serial_no):
     '''Process the files for one float.
     serial_no: serial number (string)
