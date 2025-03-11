@@ -14,10 +14,10 @@ import os
 import re
 import time
 
+import netCDF4 as nc
 import numpy as np
 import pandas as pd
 
-from netCDF4 import Dataset
 
 
 import pdb
@@ -205,8 +205,7 @@ def parse_pmp_file(lines, serial_no):
 
 
 def parse_file(file_path, ftype, serial_no):
-    '''Parse one file and extract the information from the
-    columns.'''
+    '''Parse one file and extract the information from the columns.'''
     file_info = {}
     columns = get_column_names(ftype)
     for col in columns:
@@ -234,10 +233,10 @@ def parse_file(file_path, ftype, serial_no):
                           end='')
                     print(f' found, {serial_no} expected.')
                     return file_info
-                if int(match_obj.group(2)) != DICT_FLOAT_IDS[serial_no]:
+                if int(match_obj.group(2)) != DICT_FLOAT_IDS[serial_no][0]:
                     print(f'Unexpected WMO number: {match_obj.group(2)}',
                           end='')
-                    print(f' found, {DICT_FLOAT_IDS[serial_no]} expected.')
+                    print(f' found, {DICT_FLOAT_IDS[serial_no][0]} expected.')
                     return file_info
                 do_parse = True
         elif do_parse:
@@ -398,16 +397,24 @@ def create_nc_pmp_vars(nc_out, file_info_pmp):
         create_nc_one_variable(nc_out, this_dict, var, 'pmp', use_number)
 
 
-def create_nc_file(filename_out, full_file_info):
+def create_nc_file(filename_out, full_file_info, serial_no):
     '''Create the netCDF file for one float with all dimensions and variables.'''
     print(f'Creating {filename_out}') 
     try:
-        nc_out = Dataset(filename_out, 'w', format='NETCDF4')
+        nc_out = nc.Dataset(filename_out, 'w', format='NETCDF4')
         nc_out.history = 'Created with parse_eng_bgcsolo.py on ' + \
             time.ctime(time.time())
         nc_out.update = time.ctime(time.time())
         nc_out.createDimension('N_PROF', None) # unlimited dim
-        #NOT USED AT THIS POINT nc_out.createDimension('STRING', 1)
+        nc_out.createDimension('STRING8', 8)
+        nc_out.createDimension('STRING16', 16)
+        # time-independent variables
+        nc_out.createVariable('floatid', 'i4', (), fill_value=-1)
+        nc_out.createVariable('WMOID', 'i4', (), fill_value=-1)
+        nc_out.createVariable('AOMLID', 'i4', (), fill_value=-1)
+        nc_out.createVariable('Program', 'S1', ('STRING8'), fill_value='')
+        nc_out.createVariable('Float_Type', 'S1',
+                              ('STRING16'), fill_value='') # FIXME
         lon = nc_out.createVariable('LONGITUDE', 'f4', ('N_PROF'),
                               fill_value=-999.0)
         lon.standard_name = 'longitude'
@@ -426,6 +433,15 @@ def create_nc_file(filename_out, full_file_info):
                 its_vars = this_dict.keys()
                 for var in its_vars:
                     create_nc_one_variable(nc_out, this_dict, var, ftype)
+
+        this_row = FLOAT_INFO[FLOAT_INFO.Float_ID == serial_no]
+        nc_out['floatid'][:] = serial_no
+        nc_out['WMOID'][:] = this_row.at[0,'WMOID']
+        nc_out['AOMLID'][:] = this_row.at[0,'AOML_ID']
+        str_out = this_row.at[0,'Float_Type'].ljust(16, '\0')
+        nc_out['Float_Type'][:] = nc.stringtochar(np.array(str_out, 'S'))
+        str_out = this_row.at[0,'Program'].ljust(8, '\0')
+        nc_out['Program'][:] = nc.stringtochar(np.array(str_out, 'S'))
         nc_out.close()
         return True # success
     except Exception as exc:
@@ -471,7 +487,7 @@ def write_pmp_nc(nc_out, file_info_pmp):
 def write_nc_file(filename_out, full_file_info):
     '''Write all information to the netCDF file for one float.'''
     print(f'Writing to {filename_out}')
-    nc_out = Dataset(filename_out, 'a')
+    nc_out = nc.Dataset(filename_out, 'a')
     ftypes = full_file_info.keys()
     for ftype in ftypes:
         if ftype == 'pmp':
@@ -525,6 +541,7 @@ def write_nc_file(filename_out, full_file_info):
                     nc_out['LONGITUDE'][cyc_idx] = \
                         full_file_info[ftype][var][min_cycle_index]
 
+
             its_cycles.remove(min_cycle)
     nc_out.close()
 
@@ -539,13 +556,13 @@ def process_float(serial_no):
     # dictionary with ftype as keys and dictionaries as values
     full_file_info = {}
     for ftype in FILE_TYPES:
-        file_name = f'{ftype}_{DICT_FLOAT_IDS[serial_no]}.html'
+        file_name = f'{ftype}_{DICT_FLOAT_IDS[serial_no][0]}.html'
         file_path = f'{ARGS.directory_in}/{file_name}'
         full_file_info[ftype] = parse_file(file_path, ftype, serial_no)
 
     # create netCDF file with full_file_info
     fn_nc = f'{ARGS.directory_out}/eng_ps{serial_no}.nc'
-    if not create_nc_file(fn_nc, full_file_info):
+    if not create_nc_file(fn_nc, full_file_info, serial_no):
         print('failed to create the file')
         return
 
@@ -561,11 +578,12 @@ def get_float_ids(filename):
     and return a dictionary with the internal IDs as keys and the WMO IDs
     as the values.'''
     float_info = pd.read_csv(filename)
-    internal_ids = float_info['Float ID'].values
-    wmo_ids = float_info['Float WMO'].values
-    result_dict = {key: (val1) for key, val1 in
-            zip(internal_ids, wmo_ids)}
-    return result_dict
+    float_ids = float_info['Float_ID'].values
+    aoml_ids = float_info['AOML_ID'].values
+    wmo_ids = float_info['WMOID'].values
+    result_dict = {key: (val1, val2) for key, val1, val2 in
+            zip(float_ids, wmo_ids, aoml_ids)}
+    return result_dict, float_info
 
 
 def parse_input_args():
@@ -583,8 +601,8 @@ def parse_input_args():
 
 if __name__ == '__main__':
     ARGS = parse_input_args()
-    # contents of this dictionary: dict_float_ids[internal_id] = wmoid
-    DICT_FLOAT_IDS = get_float_ids(ARGS.csv_file)
+    # contents of this dictionary: dict_float_ids[serial_number] = (wmoid, aomlid)
+    DICT_FLOAT_IDS, FLOAT_INFO = get_float_ids(ARGS.csv_file)
     for sn in DICT_FLOAT_IDS:
         process_float(sn)
 
