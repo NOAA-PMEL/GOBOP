@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/home/argotest/anaconda3/bin/python
 #
 # H. Frenzel, CICOES, UW // NOAA-PMEL
 #
@@ -24,8 +24,6 @@ import pdb
 
 FILE_TYPES = ['CTD', 'ALK', 'DOX', 'ECO', 'Na3', 'Nb3', 'OCR',
               'en1', 'en2', 'en3', 'en4', 'en5', 'gps', 'pmp']
-#FILE_TYPES = ['pmp']
-#FILE_TYPES = ['CTD']
 CTD_COLUMNS = ['Cycle', 'Status', 'numErr', 'volt', 'pres',
                'ma0', 'ma1', 'ma2', 'ma3']
 ALK_COLUMNS = ['Cycle', 'Status', 'numErr', 'volt', 'maMax', 'maAvg',
@@ -207,9 +205,6 @@ def parse_pmp_file(lines, serial_no):
 def parse_file(file_path, ftype, serial_no):
     '''Parse one file and extract the information from the columns.'''
     file_info = {}
-    columns = get_column_names(ftype)
-    for col in columns:
-        file_info[col] = []
     if not os.path.exists(file_path):
         print(f'File "{file_path}" not found!')
         return file_info
@@ -222,7 +217,8 @@ def parse_file(file_path, ftype, serial_no):
     regex_bist = re.compile(r'Serial=\s*(\d+)\s+WMO=\s*(\d+)')
     # note that en* files use 'th', others use 'td'
     regex_td = re.compile(r'<t[dh] align="center">(.+)</t[dh]>')
-    col_count_header = 0
+    is_header = True
+    columns = []
     for line in lines:
         if 'Serial' in line and 'WMO' in line:
             #DEBUG print(line)
@@ -244,6 +240,10 @@ def parse_file(file_path, ftype, serial_no):
             if not match_obj:
                 if '<tr>' in line:
                     col_count = 0 # new row started
+                    if is_header and len(columns):
+                        is_header = 0 # next come the data
+                        for col in columns:
+                            file_info[col] = []
                 continue
             match_str = match_obj.group(1).strip()
             if ftype == 'gps':
@@ -259,10 +259,8 @@ def parse_file(file_path, ftype, serial_no):
                 else:
                     match_str = prefix + match_str
             
-            if col_count_header < len(columns):
-                if match_str == columns[col_count_header]:
-                    # DEBUG print(f'{columns[col_count_header]} found')
-                    col_count_header += 1
+            if is_header:
+                columns.append(match_str)
             else:
                 str_value = match_obj.group(1)
                 if str_value.startswith('**'):
@@ -283,8 +281,6 @@ def parse_file(file_path, ftype, serial_no):
                 file_info[columns[col_count]].append(value)
                 col_count += 1
 
-    #DEBUG print(file_info)
-    #DEBUG pdb.set_trace()
     return file_info
 
 
@@ -436,11 +432,12 @@ def create_nc_file(filename_out, full_file_info, serial_no):
 
         this_row = FLOAT_INFO[FLOAT_INFO.Float_ID == serial_no]
         nc_out['floatid'][:] = serial_no
-        nc_out['WMOID'][:] = this_row.at[0,'WMOID']
-        nc_out['AOMLID'][:] = this_row.at[0,'AOML_ID']
-        str_out = this_row.at[0,'Float_Type'].ljust(16, '\0')
+        row_idx = this_row.index[0]
+        nc_out['WMOID'][:] = this_row.at[row_idx,'WMOID']
+        nc_out['AOMLID'][:] = this_row.at[row_idx,'AOML_ID']
+        str_out = this_row.at[row_idx,'Float_Type'].ljust(16, '\0')
         nc_out['Float_Type'][:] = nc.stringtochar(np.array(str_out, 'S'))
-        str_out = this_row.at[0,'Program'].ljust(8, '\0')
+        str_out = this_row.at[row_idx,'Program'].ljust(8, '\0')
         nc_out['Program'][:] = nc.stringtochar(np.array(str_out, 'S'))
         nc_out.close()
         return True # success
@@ -540,8 +537,6 @@ def write_nc_file(filename_out, full_file_info):
                 elif full_var == 'gps_First_Long':
                     nc_out['LONGITUDE'][cyc_idx] = \
                         full_file_info[ftype][var][min_cycle_index]
-
-
             its_cycles.remove(min_cycle)
     nc_out.close()
 
