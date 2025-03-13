@@ -30,12 +30,6 @@ CMD_H2P = '/home/argotest/rudics/Decoder/sio_bgc_parser/process_hex.sh'
 CMD_HT2NC = '/home/argotest/rudics/Python/parse_eng_bgcsolo.py'
 CMD_H2GD = '/home/argotest/rudics/Python/drivemaster'
 
-FTP_NAMES = []
-FTP_DIRS = []
-FTP_HOSTS = []
-FTP_USERS = []
-FTP_PW = []
-
 
 def change_cwd(this_dir):
     '''Change to the specified directory, unless it is None.'''
@@ -186,7 +180,10 @@ def sort_files_mtime(file_list):
 def read_server_info(ftp_server):
     '''Read the information about the ftp server (name, account, and password)
     from the file with the globally defined name.
-    Return the information as a dictionary.'''
+    Return the information in the format used by the json file.
+    For multiple servers, this should be a list of dictionaries.
+    For one server, it could be a dictionary or a list with
+    one dictionary entry.'''
     with open(ftp_server, 'r', encoding='utf-8') as file:
         info = json.load(file)
     return info
@@ -207,7 +204,7 @@ def connect_ftp(server, acct, passwd, secure=False):
     return ftp_server
 
 
-def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
+def upload_hex_ftp(fn_hex, fn_ftp_log, server):
     '''Upload the hex file with the specified name to the specified ftp server.'''
     # HF 05/16/2024: Claudia Schmid requested files to be uploaded as
     # e.g., 9674_004005.hex.gz
@@ -221,24 +218,21 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
     if result.returncode:
         print('WARNING: gzip command may have failed!')
     fn_gzip += '.gz'
-    if not destination:
-        dest = FTP_NAMES
-    elif isinstance(destination, list):
-        dest = destination
+    if isinstance(server, list):
+        servers = server
     else:
-        dest = [destination]
-    for dst in dest:
-        print(f'Now uploading to {dst}: {fn_gzip}')
-        idx = FTP_NAMES.index(dst)
+        servers = [server] # servers is now always a list
+    for srv in servers:
+        print(f'Now uploading to {srv["institution"]}: {fn_gzip}')
         success = False
-        if dst == 'PMEL':
+        if srv['institution'] == 'PMEL':
             secure = True
         else:
             secure = False
         try:
-            ftp_server = connect_ftp(FTP_HOSTS[idx], FTP_USERS[idx], FTP_PW[idx],
+            ftp_server = connect_ftp(srv['server'], srv['account'], srv['password'],
                                      secure=secure)
-            ftp_server.cwd(FTP_DIRS[idx])
+            ftp_server.cwd(srv['directory'])
         except ftplib.all_errors:
             print('Warning: connection to ftp server could not be established')
             return
@@ -256,25 +250,26 @@ def upload_hex_ftp(fn_hex, fn_ftp_log, destination=None):
             print(f'could not upload {fn_gzip}')
         ftp_server.quit()
         if success:
-            append_ftp_log(fn_ftp_log, fn_hex, dst)
+            append_ftp_log(fn_ftp_log, fn_hex, srv['institution'])
 
 
-def upload_file_ftp(filename, fn_ftp_log, destination):
+def upload_file_ftp(filename, fn_ftp_log, server):
     '''Upload one file to one ftp server.'''
     if ARGS.verbose:
-        print(f'Now uploading to {destination}: {filename}')
-    idx = FTP_NAMES.index(destination)
+        print(f'Now uploading to {server["institution"]}: {filename}')
     success = False
-    if destination == 'PMEL':
+    if server['institution'] == 'PMEL':
         secure = True
     else:
         secure = False
     try:
-        ftp_server = connect_ftp(FTP_HOSTS[idx], FTP_USERS[idx], FTP_PW[idx],
-                                 secure=secure)
-        ftp_server.cwd(FTP_DIRS[idx])
+        ftp_server = connect_ftp(server['server'], server['account'],
+                                 server['password'], secure=secure)
+        if 'directory' in server:
+            ftp_server.cwd(server['directory'])
     except ftplib.all_errors:
-        print('Warning: connection to ftp server could not be established')
+        print('Warning: connection to {server["server"]} could not be ' +
+              'established')
         return
     try:
         with open(filename, 'rb') as file:
@@ -290,7 +285,7 @@ def upload_file_ftp(filename, fn_ftp_log, destination):
         print(f'could not upload {filename}')
     ftp_server.quit()
     if success:
-        append_ftp_log(fn_ftp_log, filename, destination)
+        append_ftp_log(fn_ftp_log, filename, server['institution'])
 
 
 def convert_hex_to_phy(serial_no):
@@ -388,6 +383,8 @@ def process_float(serial_no):
     '''Process the files for one float.
     serial_no: serial number (string)
     Pre: serial_no must be listed in floats.csv.'''
+    ftp_servers_hex = read_server_info(FTP_SERVER_HEX)
+    ftp_server_pmel = read_server_info(FTP_SERVER_PHY)
     fn_log = f'rudics2hex_{serial_no}.log'
     if not os.path.exists(fn_log):
         create_log_file(fn_log)
@@ -419,7 +416,7 @@ def process_float(serial_no):
     if sorted_new_files:
         if not ARGS.no_transfer:
             # upload latest hex file to both AOML servers
-            upload_hex_ftp(fn_hex, fn_ftp_log, ['AOML', 'Argos'])
+            upload_hex_ftp(fn_hex, fn_ftp_log, ftp_servers_hex)
             # also upload it to Google Drive
             full_cmd = [CMD_H2GD, 'up', fn_hex, 'PMEL-BGC-S2A/']
             result = subprocess.run(full_cmd, stdout=subprocess.PIPE, check=True)
@@ -437,10 +434,9 @@ def process_float(serial_no):
         print(result.stdout) # stdout can be redirected to file by user
         if result.returncode:
             print('WARNING: html2nc command may have failed!')
-        fn_nc = f'netCDF/eng_ps{serial_no}.nc'
         # currently still uploading to PMEL server if -T is set
         fn_nc = f'netCDF/eng_ps{serial_no}.nc'
-        upload_file_ftp(fn_nc, fn_ftp_log, 'PMEL')
+        upload_file_ftp(fn_nc, fn_ftp_log, ftp_server_pmel[0])
     elif not ARGS.no_transfer and os.path.exists(fn_hex):
         # even if no new files were created, we should check if a previously
         # generated hex file was successfully uploaded (an ftp server may
@@ -448,16 +444,16 @@ def process_float(serial_no):
         rows_log = ftp_log.loc[ftp_log['Filename'] == fn_hex]
         if rows_log.empty: # file not listed in ftp log
             # upload latest hex file to both AOML servers
-            upload_hex_ftp(fn_hex, fn_ftp_log, ['AOML', 'Argos'])
+            upload_hex_ftp(fn_hex, fn_ftp_log, ftp_servers_hex)
         else:
-            for host in FTP_NAMES[0:2]:
-                rows_host = rows_log[rows_log['Destination'] == host]
+            for server in ftp_servers_hex:
+                rows_host = rows_log[rows_log['Destination'] == server['institution']]
                 if rows_host.empty:
-                    upload_hex_ftp(fn_hex, fn_ftp_log, host)
+                    upload_hex_ftp(fn_hex, fn_ftp_log, server)
                 else:
                     shasum_ftp = rows_host['Checksum'].values[-1] # most recent upload
                     if get_checksum(fn_hex) != shasum_ftp:
-                        upload_hex_ftp(fn_hex, fn_ftp_log, host)
+                        upload_hex_ftp(fn_hex, fn_ftp_log, server)
     # upload flat files to ftp as necessary (new or changed)
     change_cwd(ARGS.directory)
     if not ARGS.no_transfer:
