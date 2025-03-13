@@ -177,6 +177,35 @@ def sort_files_mtime(file_list):
     return sorted_files, last_mtime
 
 
+def check_word_first(lines, word):
+    '''Check that the given word appears only at the beginning
+    of a line. It doesn't need to be present in each line.
+    Return True if the check passed, False otherwise.'''
+    count = 0
+    for line in lines:
+        count += 1
+        if word in line and not line.startswith(word):
+            print(f'bad line {count}: "{line}"')
+            return False
+    return True
+
+def check_integrity_hex(filename_hex):
+    '''Check the integrity of the hex file.
+    Return True if all checks passed, False otherwise.'''
+    if not os.path.exists(filename_hex):
+        if ARGS.verbose:
+            print(f'File "{filename_hex}" not found!')
+        return False
+    with open(filename_hex) as f_in:
+        lines = f_in.readlines()
+    # These keywords always must be at the beginning of a line:
+    words_first = ['START', 'STOP', 'BLOCK', 'END']
+    for word in words_first:
+        if not check_word_first(lines, word):
+            print(f'WARNING! {filename_hex} looks incorrectly formatted!')
+            return False
+    return True
+
 def read_server_info(ftp_server):
     '''Read the information about the ftp server (name, account, and password)
     from the file with the globally defined name.
@@ -414,6 +443,7 @@ def process_float(serial_no):
     cwd = os.getcwd()
     # upload the hex file only if it was changed or is missing on ftp server(s)
     if sorted_new_files:
+        check_integrity_hex(fn_hex) # FIXME not yet checking return value
         if not ARGS.no_transfer:
             # upload latest hex file to both AOML servers
             upload_hex_ftp(fn_hex, fn_ftp_log, ftp_servers_hex)
